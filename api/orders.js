@@ -23,23 +23,32 @@ export default async function handler(req, res) {
       {
         method: "GET",
         headers: {
-          apikey: supabaseKey
+  apikey: supabaseKey,
+  Authorization: `Bearer ${supabaseKey}`
         }
       }
     );
 
     if (!response.ok) {
-      throw new Error(`Supabase error: ${response.status}`);
+  const errorText = await response.text();
+
+  return res.status(response.status).json({
+    success: false,
+    message: "Supabase menolak permintaan",
+    status: response.status,
+    detail: errorText
+  });
     }
 
     return res.status(200).json({
       success: true,
       message: "Koneksi TOKOCV2 ke Supabase berhasil"
     });
-  } catch (error) {
+    } catch (error) {
     return res.status(500).json({
       success: false,
-      message: "Koneksi Supabase gagal"
+      message: "Koneksi Supabase gagal",
+      detail: error.message
     });
   }
 }
