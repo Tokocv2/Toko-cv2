@@ -6,17 +6,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#6d28d9">
 <title>TOKOCV2 — Top Up Game</title>
+<meta name="description" content="TOKOCV2 – Tempat top up game dan produk digital terpercaya. Nikmati pilihan Diamond Mobile Legends, Free Fire, dan produk favorit lainnya dengan harga kompetitif serta pemesanan mudah dan praktis.">
 <style>
 :root{--purple:#7027df;--purple2:#8b5cf6;--green:#20b86a;--ink:#17142e;--muted:#716d83;--bg:#f7f5ff}
 *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
 header{background:#fff;position:sticky;top:0;z-index:5;box-shadow:0 3px 18px #24124b12}
 .wrap{max-width:1120px;margin:auto;padding:0 20px}.top{height:76px;display:flex;align-items:center;justify-content:space-between;gap:15px}
-.brand{font-weight:950;font-size:clamp(20px,4vw,30px);letter-spacing:-1.2px;color:#211542}.brand span{color:var(--purple)}.brand small{display:block;font-size:11px;letter-spacing:0;color:#716d83;font-weight:600}
+.brand{display:flex;align-items:center;gap:10px;font-family:Arial,sans-serif;font-weight:950;font-size:clamp(23px,4vw,32px);letter-spacing:-1.5px;color:#211542;white-space:nowrap}.brand .brand-name{color:#211542;font-weight:1000;text-shadow:0 2px 8px #7027df25}.brand .brand-name span{color:#8b5cf6;text-shadow:0 0 12px #8b5cf680}.brand small{display:inline-block;font-size:9px;letter-spacing:1px;color:#716d83;font-weight:800;margin:0}
 .btn{border:0;border-radius:13px;padding:12px 18px;font-weight:800;cursor:pointer}.login{background:#eee7ff;color:var(--purple)}.signup{background:var(--green);color:#fff}
 nav{display:flex;gap:8px;padding:0 0 12px;overflow:auto}nav a{white-space:nowrap;text-decoration:none;color:#29233f;font-weight:750;padding:11px 17px;border-radius:13px}nav a.active{background:var(--purple);color:white}
-.hero{margin:22px auto 18px;border-radius:24px;overflow:hidden;background:radial-gradient(circle at 80% 20%,#5b21b6,transparent 35%),linear-gradient(115deg,#17102f,#28105a 60%,#087c4d);color:#fff;padding:clamp(25px,6vw,58px);position:relative;min-height:270px;display:flex;align-items:center}
-.hero:after{content:"⚡";position:absolute;right:8%;top:12%;font-size:clamp(100px,20vw,220px);opacity:.13;transform:rotate(-12deg)}
-.hero h1{font-size:clamp(30px,5vw,54px);line-height:1.04;margin:0 0 13px;max-width:650px}.hero h1 span{color:#72f28c}.hero p{font-size:17px;color:#e4d9ff;margin:0 0 22px}.cta{background:linear-gradient(90deg,#4be66f,#9aff4b);color:#10251a;padding:14px 24px;border-radius:999px;font-weight:950;text-decoration:none;display:inline-block}
+.hero{margin:22px auto 18px;border-radius:24px;overflow:hidden;background:radial-gradient(ellipse at 85% 20%,#7928ff 0%,transparent 38%),radial-gradient(ellipse at 15% 100%,#351078 0%,transparent 45%),linear-gradient(120deg,#090817,#17102f 55%,#24104b);color:#fff;padding:clamp(25px,6vw,58px);position:relative;min-height:290px;display:flex;align-items:center;border:1px solid #8b5cf655;box-shadow:0 12px 35px #32106b30}
+.hero:after{content:"✦";position:absolute;right:9%;top:5%;font-size:clamp(130px,25vw,250px);font-weight:900;color:#b58aff;opacity:.13;transform:rotate(-15deg);text-shadow:0 0 50px #a855f7}
+.hero h1{font-size:clamp(30px,5vw,54px);line-height:1.04;margin:0 0 13px;max-width:650px;font-weight:950;letter-spacing:-1.5px;text-shadow:0 3px 20px #8b5cf655}
+.hero h1 span{color:#b794ff}
+.hero p{font-size:17px;color:#ded0ff;margin:0 0 22px}
+.cta{background:linear-gradient(90deg,#7027df,#a855f7);color:#fff;padding:14px 24px;border-radius:999px;font-weight:950;text-decoration:none;display:inline-block;box-shadow:0 5px 22px #8b5cf766}
 .trust{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px auto 30px}.trust div{background:white;padding:17px;border-radius:16px;text-align:center;font-weight:800;box-shadow:0 5px 20px #24124b0c}.trust b{display:block;color:var(--purple);font-size:23px}
 .sectionhead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:25px 0 15px}.sectionhead h2{margin:0;font-size:24px}.search{width:min(100%,300px);padding:12px 15px;border:1px solid #e4def1;border-radius:12px;background:white;font:inherit}
 .games{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}.game{border:1px solid #eee8fa;background:white;border-radius:18px;padding:17px 10px;text-align:center;cursor:pointer;box-shadow:0 5px 18px #24124b0a;transition:.18s}.game:hover{transform:translateY(-3px);border-color:#b89aff}.game img{display:block;width:100%;aspect-ratio:1.38/1;object-fit:cover;border-radius:12px;margin:0 auto 9px}.game .emoji{font-size:38px;display:block;margin-bottom:8px}.game strong{font-size:14px}
@@ -31,12 +35,15 @@ footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{dis
 .product-card .product-name{font-size:14px;font-weight:800;color:#292039}
 .product-card .product-price{font-size:15px;font-weight:800;color:var(--purple);margin-top:7px}
 .product-card .product-type{font-size:11px;color:#817b91;margin-top:4px}
- @media(max-width:760px){.games{grid-template-columns:repeat(2,1fr)}.trust{grid-template-columns:repeat(2,1fr)}.top{height:68px}.hero{min-height:245px}.promo{align-items:flex-start;flex-direction:column}}
+ @media(max-width:760px){.games{grid-template-columns:repeat(2,1fr)}.trust{grid-template-columns:repeat(2,1fr)}.top{height:68px;gap:8px}.brand{font-size:clamp(19px,5vw,25px);gap:6px}.brand small{font-size:7px;letter-spacing:.5px}.hero{min-height:245px;padding:25px 20px}.hero h1{font-size:clamp(27px,7vw,38px)}.promo{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
-<header><div class="wrap">
- <div class="top"><div class="brand">♛ TOKOCV2<small>Top Up Game Termurah & Praktis</small></div><div><button class="btn login" onclick="openModal('Masuk')">Masuk</button> <button class="btn signup" onclick="openModal('Daftar')">Daftar</button></div></div>
+ <header><div class="wrap">
+ <div class="top">
+  <div class="brand"><span class="brand-name">TOKO<span>CV2</span></span><small>TOP UP GAME & DIGITAL STORE</small></div>
+  <div><button class="btn login" onclick="openModal('Masuk')">Masuk</button> <button class="btn signup" onclick="openModal('Daftar')">Daftar</button></div>
+ </div>
  <nav><a class="active" href="#">⌂ Beranda</a><a href="#games">🎮 Semua Game</a><a href="#" onclick="alert('Riwayat transaksi akan aktif setelah sistem akun dan pembayaran dihubungkan.')">◷ Riwayat</a><a href="#promo">◆ Promo</a><a href="#bantuan">☏ Bantuan</a></nav>
 </div></header>
 <main class="wrap">
