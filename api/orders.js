@@ -16,7 +16,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     try {
       const response = await fetch(
-        `${baseUrl}/rest/v1/orders?select=orders_id&limit=0`,
+        `${baseUrl}/rest/v1/orders?select=id&limit=0`,
         {
           headers: {
             apikey: supabaseKey,
@@ -24,7 +24,6 @@ export default async function handler(req, res) {
           }
         }
       );
-
       if (!response.ok) {
         return res.status(response.status).json({
           success: false,
@@ -46,8 +45,38 @@ export default async function handler(req, res) {
   }
 
   // SIMPAN PESANAN
-  if (req.method === "POST") {
-    try {
+  if (req.method === "POST") { 
+    try {    
+         // VERIFIKASI AKUN PELANGGAN
+      const authHeader = req.headers.authorization;
+
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({
+          success: false,
+          message: "Silakan login terlebih dahulu"
+        });
+      }
+
+      const accessToken = authHeader.slice(7);
+
+      const userResponse = await fetch(
+        `${baseUrl}/auth/v1/user`,
+        {
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${accessToken}`
+          }
+        }
+      );
+
+      if (!userResponse.ok) {
+        return res.status(401).json({
+          success: false,
+          message: "Sesi login tidak valid. Silakan login kembali."
+        });
+      }
+
+      const user = await userResponse.json();
       const {
         sku,
         player_id,
@@ -149,6 +178,7 @@ export default async function handler(req, res) {
             Prefer: "return=representation"
           },
           body: JSON.stringify({
+            user_id: user.id,
             order_id: orderId,
             customer_no: customerNo,
             player_id: playerId,
@@ -184,7 +214,7 @@ export default async function handler(req, res) {
         topup_status: "pending"
       });
 
-    } catch (error) {
+      } catch (error) { 
       return res.status(500).json({
         success: false,
         message: "Terjadi kesalahan saat membuat pesanan",
@@ -197,5 +227,4 @@ export default async function handler(req, res) {
     success: false,
     message: "Method not allowed"
   });
-          }
-            
+}
