@@ -293,9 +293,14 @@ function renderProductCards(products) {
   container.innerHTML = '';
 
   products.forEach(item => {
-    const p = item.product;
-    const modal = Number(p.price);
+  const p = item.product;
 
+  const option = document.createElement('option');
+  option.value = item.index;
+  option.textContent = p.product_name;
+  select.appendChild(option);
+
+  const modal = Number(p.price);
     const untung =
       modal < 5000 ? 1000 :
       modal <= 20000 ? 1500 :
