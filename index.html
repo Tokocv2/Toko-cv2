@@ -23,7 +23,14 @@ nav{display:flex;gap:8px;padding:0 0 12px;overflow:auto}nav a{white-space:nowrap
 footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.foot p{color:#c5b8df;margin:7px 0}
 .modal{display:none;position:fixed;inset:0;background:#120a2dcc;z-index:10;padding:20px;align-items:center;justify-content:center}.modal.show{display:flex}.panel{background:white;border-radius:20px;padding:24px;width:min(100%,440px);box-shadow:0 20px 80px #0004}.panel h2{margin:0 0 8px}.panel p{color:var(--muted);margin-top:0}.panel input,.panel select{width:100%;padding:13px;border:1px solid #ded7eb;border-radius:11px;margin:7px 0 12px;font:inherit}.panel .close{float:right;background:#f1edfa;color:#44365d}.panel .submit{background:var(--purple);color:white;width:100%;margin-top:5px}
 .note{font-size:12px;color:#817b91;margin-top:14px}
-@media(max-width:760px){.games{grid-template-columns:repeat(2,1fr)}.trust{grid-template-columns:repeat(2,1fr)}.top{height:68px}.hero{min-height:245px}.promo{align-items:flex-start;flex-direction:column}}
+.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin:10px 0 18px}
+.product-card{border:1.5px solid #e8e1f0;border-radius:14px;padding:13px;background:#fff;cursor:pointer;transition:.2s;text-align:left}
+.product-card:hover{border-color:var(--purple);transform:translateY(-2px)}
+.product-card.active{border:2px solid var(--purple);background:#f7f2ff;box-shadow:0 4px 14px #6e41be20}
+.product-card .product-name{font-size:14px;font-weight:800;color:#292039}
+.product-card .product-price{font-size:15px;font-weight:800;color:var(--purple);margin-top:7px}
+.product-card .product-type{font-size:11px;color:#817b91;margin-top:4px}
+ @media(max-width:760px){.games{grid-template-columns:repeat(2,1fr)}.trust{grid-template-columns:repeat(2,1fr)}.top{height:68px}.hero{min-height:245px}.promo{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
@@ -83,25 +90,32 @@ footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{dis
     <form id="orderForm" onsubmit="submitOrder(event)">
 
       <label for="selectedGame">Game</label>
-      <input id="selectedGame" readonly required>
+<input id="selectedGame" readonly required>
 
-      <label for="playerId">ID pemain / User ID</label>
-      <input id="playerId"
-        placeholder="Masukkan ID pemain"
-        required>
+<div id="productTypeSection" style="display:none">
+  <label>Pilih Jenis Produk</label>
+  <div id="productTypeOptions" class="product-grid"></div>
+</div>
 
-      <label for="playerServer">Server (jika diperlukan)</label>
-      <input id="playerServer"
-        placeholder="Masukkan server">
+<label>Pilih Produk</label>
+<div id="productOptions" class="product-grid">
+  <p>Pilih jenis produk terlebih dahulu.</p>
+</div>
 
-      <label for="productSelect">Nominal</label>
-      <select id="productSelect" required>
-        <option value="">Memuat daftar nominal...</option>
-      </select>
+<select id="productSelect" style="display:none"></select>
 
-      <button type="submit" class="btn submit">
-        Lanjutkan
-      </button>
+<label for="playerId">ID pemain / User ID</label>
+<input id="playerId"
+  placeholder="Masukkan ID pemain"
+  required>
+
+<label for="playerServer">Server (jika diperlukan)</label>
+<input id="playerServer"
+  placeholder="Masukkan server">
+
+<button type="submit" class="btn submit">
+  Lanjutkan
+</button>
 
     </form>
 
@@ -178,28 +192,32 @@ function normalizeText(value) {
 }
 
 // FILTER PRODUK BERDASARKAN GAME
+let selectedProductType = '';
+
 function updateProductOptions() {
   const select = document.getElementById('productSelect');
+  const typeSection = document.getElementById('productTypeSection');
+  const typeOptions = document.getElementById('productTypeOptions');
+  const productOptions = document.getElementById('productOptions');
   const game = document.getElementById('selectedGame').value;
 
   select.innerHTML = '';
+  typeOptions.innerHTML = '';
+  productOptions.innerHTML = '';
+  typeSection.style.display = 'none';
+  selectedProductType = '';
 
-  if (!game) {
-    select.innerHTML =
-      '<option value="">Pilih game terlebih dahulu</option>';
-    return;
-  }
+  if (!game) return;
 
   const gameKey = Object.keys(gameAliases).find(
-  name => normalizeText(name) === normalizeText(game)
-);
-const aliases = gameAliases[gameKey] || [game];
+    name => normalizeText(name) === normalizeText(game)
+  );
+  const aliases = gameAliases[gameKey] || [game];
 
   const matched = digiflazzProducts
     .map((product, index) => ({ product, index }))
     .filter(item => {
       const p = item.product;
-
       const fields = [
         p.product_name,
         p.category,
@@ -214,20 +232,71 @@ const aliases = gameAliases[gameKey] || [game];
       );
     });
 
-  if (matched.length === 0) {
-    select.innerHTML =
-      '<option value="">Nominal game belum tersedia</option>';
+  if (!matched.length) {
+    productOptions.innerHTML = '<p>Produk belum tersedia.</p>';
     return;
   }
 
-  select.innerHTML =
-    '<option value="">Pilih nominal</option>';
+  const memberships = matched.filter(item =>
+    normalizeText(item.product.type) === 'membership'
+  );
 
-  matched.forEach(item => {
+  const diamonds = matched.filter(item =>
+    normalizeText(item.product.type) !== 'membership'
+  );
+
+  if (memberships.length && diamonds.length) {
+    typeSection.style.display = 'block';
+
+    ['Membership', 'Diamond'].forEach(type => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'product-card';
+      card.textContent = type;
+
+      card.onclick = () => {
+        selectedProductType = type;
+
+        typeOptions.querySelectorAll('.product-card').forEach(el =>
+          el.classList.remove('active')
+        );
+
+        card.classList.add('active');
+
+        renderProductCards(
+          type === 'Membership' ? memberships : diamonds
+        );
+      };
+
+      typeOptions.appendChild(card);
+    });
+
+    productOptions.innerHTML =
+      '<p>Pilih jenis produk terlebih dahulu.</p>';
+
+  } else {
+    typeSection.style.display = 'none';
+
+    renderProductCards(
+      memberships.length ? memberships : diamonds
+    );
+  }
+}
+ 
+
+
+function renderProductCards(products) {
+  const select = document.getElementById('productSelect');
+  const container = document.getElementById('productOptions');
+
+  select.innerHTML = '';
+  container.innerHTML = '';
+
+  products.forEach(item => {
     const p = item.product;
     const modal = Number(p.price);
 
-    let untung =
+    const untung =
       modal < 5000 ? 1000 :
       modal <= 20000 ? 1500 :
       modal <= 50000 ? 2000 :
@@ -235,16 +304,28 @@ const aliases = gameAliases[gameKey] || [game];
 
     const hargaJual = modal + untung;
 
-    const option = document.createElement('option');
-    option.value = item.index;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'product-card';
+    card.innerHTML = `
+      <div class="product-name">${p.product_name}</div>
+      <div class="product-price">
+        Rp${hargaJual.toLocaleString('id-ID')}
+      </div>
+      <div class="product-type">${p.type || ''}</div>
+    `;
 
-    option.textContent =
-      `${p.product_name} - Rp${hargaJual.toLocaleString('id-ID')}`;
+    card.onclick = () => {
+      select.value = item.index;
+      container.querySelectorAll('.product-card').forEach(el =>
+        el.classList.remove('active')
+      );
+      card.classList.add('active');
+    };
 
-    select.appendChild(option);
+        container.appendChild(card);
   });
 }
-
 // AMBIL PRODUK DARI API
 async function loadDigiflazzProducts() {
   const select = document.getElementById('productSelect');
