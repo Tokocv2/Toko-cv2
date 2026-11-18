@@ -42,7 +42,10 @@ footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{dis
  <header><div class="wrap">
  <div class="top">
   <div class="brand"><span class="brand-name">TOKO<span>CV2</span></span><small>TOP UP GAME & DIGITAL STORE</small></div>
-  <div><button class="btn login" onclick="openModal('Masuk')">Masuk</button> <button class="btn signup" onclick="openModal('Daftar')">Daftar</button></div>
+     <div id="authButtons">
+  <button class="btn login" onclick="openAuthModal('login')">Masuk</button>
+  <button class="btn signup" onclick="openAuthModal('register')">Daftar</button>
+     </div>
  </div>
  <nav><a class="active" href="#">⌂ Beranda</a><a href="#games">🎮 Semua Game</a><a href="#" onclick="alert('Riwayat transaksi akan aktif setelah sistem akun dan pembayaran dihubungkan.')">◷ Riwayat</a><a href="#promo">◆ Promo</a><a href="#bantuan">☏ Bantuan</a></nav>
 </div></header>
@@ -134,10 +137,78 @@ footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{dis
 
   </div>
 </div>
+<!-- MODAL AKUN PELANGGAN -->
+<div class="modal" id="authModal"
+  onclick="if(event.target===this)closeAuthModal()">
+  <div class="panel">
 
-<script>
+    <button type="button" class="btn close"
+      onclick="closeAuthModal()">Tutup ✕</button>
 
-function choose(game) {
+    <div id="loginFormSection">
+      <h2>Masuk TOKOCV2</h2>
+      <p>Masuk ke akun pelanggan kamu.</p>
+
+      <form id="loginForm" onsubmit="loginCustomer(event)">
+        <label>Email</label>
+        <input type="email" id="loginEmail"
+          placeholder="Masukkan email" required>
+
+        <label>Kata sandi</label>
+        <input type="password" id="loginPassword"
+          placeholder="Masukkan kata sandi" required>
+
+        <button type="submit" class="btn submit">
+          Masuk
+        </button>
+      </form>
+
+      <p>Belum punya akun?
+        <a href="#" onclick="showAuthForm('register');return false;">Daftar</a>
+      </p>
+    </div>
+
+    <div id="registerFormSection" style="display:none">
+      <h2>Daftar TOKOCV2</h2>
+      <p>Buat akun pelanggan baru.</p>
+
+      <form id="registerForm" onsubmit="registerCustomer(event)">
+        <label>Nama lengkap</label>
+        <input type="text" id="registerName"
+          placeholder="Masukkan nama lengkap" required>
+
+        <label>Email</label>
+        <input type="email" id="registerEmail"
+          placeholder="Masukkan email" required>
+
+        <label>Kata sandi</label>
+        <input type="password" id="registerPassword"
+          placeholder="Minimal 8 karakter" minlength="8" required>
+
+        <button type="submit" class="btn submit">
+          Daftar Sekarang
+        </button>
+      </form>
+
+      <p>Sudah punya akun?
+        <a href="#" onclick="showAuthForm('login');return false;">Masuk</a>
+      </p>
+    </div>
+
+  </div>
+</div>
+<!-- AKHIR MODAL AKUN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+ <script>
+const SUPABASE_URL = 'https://zwenheyrjoarriztnlas.supabase.co';
+
+const SUPABASE_KEY = 'sb_publishable_c7Oi3o4Ut_qSw8Y0QNssSg_pHDXt7RW';
+
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
+  function choose(game) {
   document.getElementById('selectedGame').value = game;
   document.getElementById('modalTitle').textContent = 'Pesan ' + game;
   document.getElementById('modalDesc').textContent =
@@ -414,6 +485,130 @@ function submitOrder(event) {
 );
 }
 
+function openAuthModal(mode) {
+  document.getElementById('authModal').classList.add('show');
+  showAuthForm(mode);
+}
+
+function closeAuthModal() {
+  document.getElementById('authModal').classList.remove('show');
+}
+
+function showAuthForm(mode) {
+  document.getElementById('loginFormSection').style.display =
+    mode === 'login' ? 'block' : 'none';
+
+  document.getElementById('registerFormSection').style.display =
+    mode === 'register' ? 'block' : 'none';
+}
+
+async function registerCustomer(event) {
+  event.preventDefault();
+
+  const name = document.getElementById('registerName').value.trim();
+  const email = document.getElementById('registerEmail').value.trim();
+  const password = document.getElementById('registerPassword').value;
+
+  try {
+    const { data, error } = await supabaseClient.auth.signUp({
+      email: email,
+      password: password,
+      options: {
+        data: {
+          full_name: name
+        }
+      }
+    });
+
+    if (error) {
+      alert('Pendaftaran gagal: ' + error.message);
+      return;
+    }
+
+    if (data.session) {
+      alert('Pendaftaran berhasil! Selamat datang di TOKOCV2.');
+      closeAuthModal();
+    } else {
+      alert('Pendaftaran berhasil! Silakan periksa email untuk verifikasi akun.');
+      showAuthForm('login');
+    }
+
+    document.getElementById('registerForm').reset();
+
+  } catch (error) {
+    alert('Terjadi kesalahan koneksi: ' + error.message);
+  }
+}
+
+async function loginCustomer(event) {
+  event.preventDefault();
+
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
+
+    if (error) {
+      alert('Login gagal: ' + error.message);
+      return;
+    }
+
+    alert('Berhasil masuk ke TOKOCV2. Selamat datang!');
+    document.getElementById('loginForm').reset();
+    closeAuthModal();
+
+  } catch (error) {
+    alert('Terjadi kesalahan koneksi: ' + error.message);
+  }
+}
+
+async function logoutCustomer() {
+  const { error } = await supabaseClient.auth.signOut();
+
+  if (error) {
+    alert('Gagal keluar: ' + error.message);
+    return;
+  }
+
+    alert('Kamu berhasil keluar dari akun.');
+}
+ 
+function updateAuthButtons(user) {
+  const container = document.getElementById('authButtons');
+  container.replaceChildren();
+
+  if (user) {
+    const nameButton = document.createElement('button');
+    nameButton.className = 'btn login';
+    nameButton.textContent =
+      user.user_metadata?.full_name || user.email;
+
+    const logoutButton = document.createElement('button');
+    logoutButton.className = 'btn signup';
+    logoutButton.textContent = 'Keluar';
+    logoutButton.onclick = logoutCustomer;
+
+    container.append(nameButton, logoutButton);
+  } else {
+    container.innerHTML = `
+      <button class="btn login" onclick="openAuthModal('login')">Masuk</button>
+      <button class="btn signup" onclick="openAuthModal('register')">Daftar</button>
+    `;
+  }
+}
+
+supabaseClient.auth.getSession().then(({ data }) => {
+  updateAuthButtons(data.session?.user || null);
+});
+
+supabaseClient.auth.onAuthStateChange((event, session) => {
+  updateAuthButtons(session?.user || null);
+});
+  
 loadDigiflazzProducts();
 </script>
 </body>
