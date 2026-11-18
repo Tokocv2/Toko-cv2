@@ -450,7 +450,7 @@ async function loadDigiflazzProducts() {
 }
 
 // VALIDASI PESANAN DEMO
-function submitOrder(event) {
+async function submitOrder(event) {
   event.preventDefault();
 
   const select = document.getElementById('productSelect');
@@ -467,24 +467,62 @@ function submitOrder(event) {
 
   const product = digiflazzProducts[index];
 
-  const harga = Number(product.price);
-  const untung =
-    harga < 5000 ? 1000 :
-    harga <= 20000 ? 1500 :
-    harga <= 50000 ? 2000 :
-    harga <= 100000 ? 3000 : 5000;
+  const playerId = document.getElementById('playerId').value.trim();
+  const playerServer = document.getElementById('playerServer').value.trim();
+  const game = document.getElementById('selectedGame').value.trim();
 
-  const hargaJual = harga + untung;
+  if (!playerId) {
+    alert('Masukkan ID pemain terlebih dahulu.');
+    return;
+  }
 
-  alert(
-  'Data pesanan berhasil divalidasi!\n\n' +
-  'Game: ' + document.getElementById('selectedGame').value + '\n' +
-  'Produk: ' + product.product_name + '\n' +
-  'Harga: Rp' + hargaJual.toLocaleString('id-ID') +
-  '\n\nIni masih simulasi. Pembayaran belum aktif.'
-);
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+
+    if (error || !data.session) {
+      alert('Silakan login terlebih dahulu.');
+      openAuthModal('login');
+      return;
+    }
+
+    const response = await fetch('/api/orders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + data.session.access_token
+      },
+      body: JSON.stringify({
+        sku: product.buyer_sku_code,
+        player_id: playerId,
+        player_server: playerServer,
+        game: game
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      alert(result.message || 'Pesanan gagal dibuat.');
+      return;
+    }
+
+    alert(
+      'Pesanan berhasil disimpan!\n\n' +
+      'Nomor: ' + result.order_id + '\n' +
+      'Game: ' + game + '\n' +
+      'Produk: ' + result.product_name + '\n' +
+      'Harga: Rp' + Number(result.selling_price).toLocaleString('id-ID') +
+      '\nStatus: Menunggu pembayaran'
+    );
+
+    closeModal();
+
+  } catch (error) {
+    alert('Terjadi kesalahan koneksi. Silakan coba lagi.');
+  }
 }
 
+ 
 function openAuthModal(mode) {
   document.getElementById('authModal').classList.add('show');
   showAuthForm(mode);
