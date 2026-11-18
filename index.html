@@ -11,7 +11,51 @@
 :root{--purple:#7027df;--purple2:#8b5cf6;--green:#20b86a;--ink:#17142e;--muted:#716d83;--bg:#f7f5ff}
 *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
 header{background:#fff;position:sticky;top:0;z-index:5;box-shadow:0 3px 18px #24124b12}
-.wrap{max-width:1120px;margin:auto;padding:0 20px}.top{height:76px;display:flex;align-items:center;justify-content:space-between;gap:15px}
+.payment-section{
+  margin-top:32px;
+  padding-top:24px;
+  border-top:1px solid #e5e7eb;
+}
+.payment-section h2{
+  font-size:20px;
+  color:#222;
+  margin-bottom:8px;
+}
+.payment-section h3{
+  font-size:15px;
+  margin:22px 0 12px;
+  color:#333;
+}
+.payment-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.payment-card{
+  min-height:58px;
+  padding:12px;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:9px;
+  font-weight:700;
+  color:#333;
+}
+.payment-notice{
+  margin-top:20px;
+  padding:14px;
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  border-radius:9px;
+  color:#9a3412;
+  font-size:13px;
+}
+@media(max-width:600px){
+  .payment-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+ 
+ .wrap{max-width:1120px;margin:auto;padding:0 20px}.top{height:76px;display:flex;align-items:center;justify-content:space-between;gap:15px}
 .brand{display:flex;align-items:center;gap:10px;font-family:Arial,sans-serif;font-weight:950;font-size:clamp(23px,4vw,32px);letter-spacing:-1.5px;color:#211542;white-space:nowrap}.brand .brand-name{color:#211542;font-weight:1000;text-shadow:0 2px 8px #7027df25}.brand .brand-name span{color:#8b5cf6;text-shadow:0 0 12px #8b5cf680}.brand small{display:inline-block;font-size:9px;letter-spacing:1px;color:#716d83;font-weight:800;margin:0}
 .btn{border:0;border-radius:13px;padding:12px 18px;font-weight:800;cursor:pointer}.login{background:#eee7ff;color:var(--purple)}.signup{background:var(--green);color:#fff}
 nav{display:flex;gap:8px;padding:0 0 12px;overflow:auto}nav a{white-space:nowrap;text-decoration:none;color:#29233f;font-weight:750;padding:11px 17px;border-radius:13px}nav a.active{background:var(--purple);color:white}
@@ -26,7 +70,19 @@ nav{display:flex;gap:8px;padding:0 0 12px;overflow:auto}nav a{white-space:nowrap
 .games{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}.game{border:1px solid #eee8fa;background:white;border-radius:18px;padding:17px 10px;text-align:center;cursor:pointer;box-shadow:0 5px 18px #24124b0a;transition:.18s}.game:hover{transform:translateY(-3px);border-color:#b89aff}.game img{display:block;width:100%;aspect-ratio:1.38/1;object-fit:cover;border-radius:12px;margin:0 auto 9px}.game .emoji{font-size:38px;display:block;margin-bottom:8px}.game strong{font-size:14px}
 .promo{margin:30px 0;background:linear-gradient(100deg,#25104e,#6c25d6 65%,#087d4a);color:white;padding:26px;border-radius:22px;display:flex;align-items:center;justify-content:space-between;gap:20px}.promo h2{margin:0 0 6px;font-size:clamp(22px,4vw,34px)}.promo p{margin:0;color:#e8ddff}
 footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.foot p{color:#c5b8df;margin:7px 0}
-.modal{display:none;position:fixed;inset:0;background:#120a2dcc;z-index:10;padding:20px;align-items:center;justify-content:center}.modal.show{display:flex}.panel{background:white;border-radius:20px;padding:24px;width:min(100%,440px);box-shadow:0 20px 80px #0004}.panel h2{margin:0 0 8px}.panel p{color:var(--muted);margin-top:0}.panel input,.panel select{width:100%;padding:13px;border:1px solid #ded7eb;border-radius:11px;margin:7px 0 12px;font:inherit}.panel .close{float:right;background:#f1edfa;color:#44365d}.panel .submit{background:var(--purple);color:white;width:100%;margin-top:5px}
+.modal{display:none;position:fixed;inset:0;background:#fff;z-index:10;padding:20px;align-items:flex-start;justify-content:center;overflow-y:auto}
+.modal.show{display:flex}
+.panel{background:#fff;border-radius:0;padding:24px;width:100%;max-width:900px;min-height:100vh;box-shadow:none;margin:0 auto}.panel h2{color:#222;margin:0 0 12px}.panel p{color:#666}.panel input,.panel select{width:100%;padding:14px;border:1px solid #ddd;border-radius:8px;margin:7px 0 14px;font:inherit}
+.panel .close{float:right;background:#f3f4f6;color:#333;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}
+.panel .submit{background:#16a34a;color:#fff;width:100%;margin-top:10px}
+.panel .product-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0 22px}
+.panel .product-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:left;cursor:pointer;min-height:76px;transition:border-color .15s,background .15s}
+.panel .product-card.active{border:2px solid #16a34a;background:#f0fdf4;box-shadow:0 0 0 1px #16a34a}
+.panel .product-card .product-name{font-size:14px;font-weight:700;color:#222}
+.panel .product-card .product-price{font-size:14px;font-weight:700;color:#16a34a;margin-top:7px}
+.panel .product-card .product-type{display:none}
+@media(max-width:600px){.panel .product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.panel .product-card{padding:12px}}
+.panel .product-card{border:1px solid #e5e5e5;border-radius:10px;padding:16px;background:#fff}.panel .product-card.active{border:2px solid #16a34a;background:#f0fdf4;box-shadow:none}.panel .product-card .product-price{color:#16a34a}
 .note{font-size:12px;color:#817b91;margin-top:14px}
 .product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin:10px 0 18px}
 .product-card{border:1.5px solid #e8e1f0;border-radius:14px;padding:13px;background:#fff;cursor:pointer;transition:.2s;text-align:left}
@@ -123,7 +179,67 @@ footer{background:#20143c;color:#eee6ff;margin-top:40px;padding:28px 0}.foot{dis
 <label for="playerServer">Server (jika diperlukan)</label>
 <input id="playerServer"
   placeholder="Masukkan server">
+  
+<div id="paymentSection" class="payment-section">
 
+  <h2>3. Pilih Metode Pembayaran</h2>
+  <p>Pilih metode pembayaran yang kamu inginkan.</p>
+
+  <h3>Virtual Account (VA)</h3>
+  <div class="payment-grid">
+    <button type="button" class="payment-card">BCA</button>
+    <button type="button" class="payment-card">BRI</button>
+    <button type="button" class="payment-card">BNI</button>
+    <button type="button" class="payment-card">Mandiri</button>
+    <button type="button" class="payment-card">BSI</button>
+    <button type="button" class="payment-card">Permata</button>
+    <button type="button" class="payment-card">CIMB Niaga</button>
+    <button type="button" class="payment-card">Danamon</button>
+  </div>
+
+  <h3>E-Wallet</h3>
+  <div class="payment-grid">
+    <button type="button" class="payment-card">DANA</button>
+    <button type="button" class="payment-card">OVO</button>
+    <button type="button" class="payment-card">GoPay</button>
+    <button type="button" class="payment-card">ShopeePay</button>
+    <button type="button" class="payment-card">LinkAja</button>
+    <button type="button" class="payment-card">iSaku</button>
+  </div>
+
+  <h3>Pembayaran QR</h3>
+  <div class="payment-grid">
+    <button type="button" class="payment-card">QRIS</button>
+  </div>
+
+  <h3>Transfer Bank</h3>
+  <div class="payment-grid">
+    <button type="button" class="payment-card">Transfer BCA</button>
+    <button type="button" class="payment-card">Transfer BRI</button>
+    <button type="button" class="payment-card">Transfer BNI</button>
+    <button type="button" class="payment-card">Transfer Mandiri</button>
+  </div>
+
+  <h3>Gerai Retail</h3>
+  <div class="payment-grid">
+    <button type="button" class="payment-card">Alfamart</button>
+    <button type="button" class="payment-card">Indomaret</button>
+  </div>
+
+  <h3>Kartu Kredit / Debit</h3>
+  <div class="payment-grid">
+    <button type="button" class="payment-card">Visa</button>
+    <button type="button" class="payment-card">Mastercard</button>
+  </div>
+
+  <div class="payment-notice">
+    Metode pembayaran belum aktif. Menunggu verifikasi
+    akun dan integrasi Midtrans.
+    Jangan melakukan pembayaran melalui pilihan ini dulu.
+  </div>
+
+</div>
+     
 <button type="submit" class="btn submit">
   Lanjutkan
 </button>
@@ -208,17 +324,21 @@ const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_KEY
 );
-  function choose(game) {
+
+function choose(game) {
+  document.getElementById('orderForm').reset();
   document.getElementById('selectedGame').value = game;
-  document.getElementById('modalTitle').textContent = 'Pesan ' + game;
+  document.getElementById('modalTitle').textContent = game + ' Top Up';
   document.getElementById('modalDesc').textContent =
-    'Masukkan detail akun untuk pemesanan ' + game + '.';
+    'Pilih nominal ' + game + ' dan masukkan ID pemain kamu.';
 
   document.getElementById('modal').classList.add('show');
 
   updateProductOptions();
-}
 
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+ 
 function openModal(title) {
   document.getElementById('orderForm').reset();
 
@@ -372,14 +492,14 @@ function renderProductCards(products) {
   container.innerHTML = '';
 
   products.forEach(item => {
-  const p = item.product;
+    const p = item.product;
 
-  const option = document.createElement('option');
-  option.value = item.index;
-  option.textContent = p.product_name;
-  select.appendChild(option);
+    const option = document.createElement('option');
+    option.value = item.index;
+    option.textContent = p.product_name;
+    select.appendChild(option);
 
-  const modal = Number(p.price);
+    const modal = Number(p.price);
     const untung =
       modal < 5000 ? 1000 :
       modal <= 20000 ? 1500 :
@@ -391,25 +511,47 @@ function renderProductCards(products) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'product-card';
-    card.innerHTML = `
-      <div class="product-name">${p.product_name}</div>
-      <div class="product-price">
-        Rp${hargaJual.toLocaleString('id-ID')}
-      </div>
-      <div class="product-type">${p.type || ''}</div>
-    `;
+
+    const nama = document.createElement('div');
+    nama.className = 'product-name';
+    nama.textContent = p.product_name;
+
+    const harga = document.createElement('div');
+    harga.className = 'product-price';
+    harga.textContent = 'Rp' + hargaJual.toLocaleString('id-ID');
+
+    const tipe = document.createElement('div');
+    tipe.className = 'product-type';
+    tipe.textContent = p.type || '';
+
+    card.append(nama, harga, tipe);
 
     card.onclick = () => {
       select.value = item.index;
+
       container.querySelectorAll('.product-card').forEach(el =>
         el.classList.remove('active')
       );
+
       card.classList.add('active');
+
+      const paymentSection = document.getElementById('paymentSection');
+
+      if (paymentSection) {
+        setTimeout(() => {
+          paymentSection.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+          });
+        }, 200);
+      }
     };
 
-        container.appendChild(card);
+    container.appendChild(card);
   });
 }
+  
+
 // AMBIL PRODUK DARI API
 async function loadDigiflazzProducts() {
   const select = document.getElementById('productSelect');
