@@ -10,11 +10,13 @@ export default async function handler(req, res) {
     });
   }
 
-  // Tes koneksi Supabase
+  const baseUrl = supabaseUrl.replace(/\/+$/, "");
+
+  // TES KONEKSI
   if (req.method === "GET") {
     try {
       const response = await fetch(
-        `${supabaseUrl.replace(/\/$/, "")}/rest/v1/orders?select=orders_id&limit=0`,
+        `${baseUrl}/rest/v1/orders?select=orders_id&limit=0`,
         {
           headers: {
             apikey: supabaseKey,
@@ -38,55 +40,106 @@ export default async function handler(req, res) {
     } catch (error) {
       return res.status(500).json({
         success: false,
-        message: "Koneksi Supabase gagal",
-        detail: error.message
+        message: "Koneksi Supabase gagal"
       });
     }
   }
 
-  // Simpan pesanan
+  // SIMPAN PESANAN
   if (req.method === "POST") {
-    const {
-      order_id,
-      customer_no,
-      sku,
-      product_name,
-      modal,
-      selling_price
-    } = req.body || {};
-
-    if (
-      !order_id ||
-      !customer_no ||
-      !sku ||
-      !product_name ||
-      modal === undefined ||
-      selling_price === undefined
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Data pesanan belum lengkap"
-      });
-    }
-
-    const modalValue = Number(modal);
-    const sellingValue = Number(selling_price);
-
-    if (
-      !Number.isFinite(modalValue) ||
-      !Number.isFinite(sellingValue) ||
-      modalValue < 0 ||
-      sellingValue < 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Harga pesanan tidak valid"
-      });
-    }
-
     try {
-      const response = await fetch(
-        `${supabaseUrl.replace(/\/$/, "")}/rest/v1/orders`,
+      const {
+        sku,
+        player_id,
+        player_server,
+        game
+      } = req.body || {};
+
+      if (
+        typeof sku !== "string" ||
+        !sku.trim() ||
+        typeof player_id !== "string" ||
+        !player_id.trim() ||
+        typeof game !== "string" ||
+        !game.trim() ||
+        (player_server !== undefined &&
+          typeof player_server !== "string")
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Data pesanan tidak lengkap atau tidak valid"
+        });
+      }
+
+      // Ambil daftar produk dari endpoint Digiflazz
+      if (!process.env.VERCEL_URL) {
+        return res.status(500).json({
+          success: false,
+          message: "Konfigurasi URL produk belum tersedia"
+        });
+      }
+
+      const productsResponse = await fetch(
+        `https://${process.env.VERCEL_URL}/api/products`,
+        { cache: "no-store" }
+      );
+
+      if (!productsResponse.ok) {
+        return res.status(503).json({
+          success: false,
+          message: "Daftar produk belum tersedia"
+        });
+      }
+
+      const productsResult = await productsResponse.json();
+
+      if (!Array.isArray(productsResult.data)) {
+        return res.status(503).json({
+          success: false,
+          message: "Data produk tidak valid"
+        });
+      }
+
+      const product = productsResult.data.find(
+        p => p.buyer_sku_code === sku.trim()
+      );
+
+      if (!product) {
+        return res.status(400).json({
+          success: false,
+          message: "Produk tidak ditemukan"
+        });
+      }
+
+      const modal = Number(product.price);
+
+      if (!Number.isFinite(modal) || modal <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Harga modal produk tidak valid"
+        });
+      }
+
+      const untung =
+        modal < 5000 ? 1000 :
+        modal <= 20000 ? 1500 :
+        modal <= 50000 ? 2000 :
+        modal <= 100000 ? 3000 : 5000;
+
+      const hargaJual = modal + untung;
+
+      const crypto = await import("node:crypto");
+      const orderId = "TCV2-" + crypto.randomUUID();
+
+      const playerId = player_id.trim();
+      const playerServer = (player_server || "").trim();
+
+      const customerNo = playerServer
+        ? `${playerId}|${playerServer}`
+        : playerId;
+
+      const saveResponse = await fetch(
+        `${baseUrl}/rest/v1/orders`,
         {
           method: "POST",
           headers: {
@@ -96,38 +149,45 @@ export default async function handler(req, res) {
             Prefer: "return=representation"
           },
           body: JSON.stringify({
-            order_id,
-            customer_no,
-            sku,
-            product_name,
-            modal: modalValue,
-            selling_price: sellingValue,
-            profit: sellingValue - modalValue,
+            order_id: orderId,
+            customer_no: customerNo,
+            player_id: playerId,
+            player_server: playerServer || null,
+            sku: product.buyer_sku_code,
+            product_name: product.product_name,
+            modal: modal,
+            selling_price: hargaJual,
+            profit: untung,
             payment_status: "pending",
             topup_status: "pending"
           })
         }
       );
 
-      const result = await response.json();
+      const savedData = await saveResponse.json();
 
-      if (!response.ok) {
-        return res.status(response.status).json({
+      if (!saveResponse.ok) {
+        return res.status(500).json({
           success: false,
           message: "Gagal menyimpan pesanan",
-          detail: result
+          detail: savedData
         });
       }
 
       return res.status(201).json({
         success: true,
         message: "Pesanan berhasil disimpan",
-        data: result
+        order_id: orderId,
+        product_name: product.product_name,
+        selling_price: hargaJual,
+        payment_status: "pending",
+        topup_status: "pending"
       });
+
     } catch (error) {
       return res.status(500).json({
         success: false,
-        message: "Gagal menyimpan pesanan",
+        message: "Terjadi kesalahan saat membuat pesanan",
         detail: error.message
       });
     }
@@ -137,4 +197,5 @@ export default async function handler(req, res) {
     success: false,
     message: "Method not allowed"
   });
-}
+          }
+            
