@@ -782,14 +782,13 @@ body{margin:0;background:#241333!important;color:#fff!important;font-family:Inte
 <p class="digital-note">Tekan kategori untuk melihat pilihan produk dan nominal yang tersedia dari katalog.</p>
 </section>
 <section class="news-section esports-newsroom" id="berita">
-<div class="section-heading"><div><span class="section-kicker">THE LATEST FROM THE ARENA</span><h2>Berita &amp; Turnamen Esports</h2><p>Liputan berbagai game kompetitif dari panggung nasional hingga dunia.</p></div><span class="newsroom-mark">TOKOCV2 <b>ESPORTS</b></span></div>
-<div aria-label="Geser berita esports" class="esports-news-rail">
-<article class="esports-story story-red"><div class="story-art"><span class="story-code">MLBB</span><b>⚔</b><small>MOBA · GLOBAL</small></div><div class="story-body"><span class="story-tag">MOBILE LEGENDS</span><h3>Persaingan tim MLBB di panggung internasional</h3><p>Kenali turnamen besar, tim unggulan, dan cerita di balik kompetisi Mobile Legends.</p><a href="#berita">Baca liputan <b>→</b></a></div></article>
-<article class="esports-story story-violet"><div class="story-art"><span class="story-code">VAL</span><b>⌖</b><small>FPS · GLOBAL</small></div><div class="story-body"><span class="story-tag">VALORANT</span><h3>Strategi dan rivalitas di skena Valorant</h3><p>Ikuti perkembangan kompetisi, perubahan roster, dan momen penting di arena FPS.</p><a href="#berita">Baca liputan <b>→</b></a></div></article>
-<article class="esports-story story-gold"><div class="story-art"><span class="story-code">PUBGM</span><b>◈</b><small>BATTLE ROYALE</small></div><div class="story-body"><span class="story-tag">PUBG MOBILE</span><h3>Perjalanan menuju puncak kompetisi battle royale</h3><p>Sorotan format turnamen, performa skuad, dan persaingan di level dunia.</p><a href="#berita">Baca liputan <b>→</b></a></div></article>
-<article class="esports-story story-cyan"><div class="story-art"><span class="story-code">EFOOT</span><b>⚽</b><small>SPORTS · ESPORTS</small></div><div class="story-body"><span class="story-tag">FOOTBALL ESPORTS</span><h3>Kompetisi esports sepak bola terus berkembang</h3><p>Berita kompetisi, pemain, dan komunitas game sepak bola digital.</p><a href="#berita">Baca liputan <b>→</b></a></div></article>
+<div class="section-heading"><div><span class="section-kicker">THE LATEST FROM THE ARENA</span><h2>Berita &amp; Turnamen Esports</h2><p>Berita dan turnamen game nasional serta internasional, diperbarui otomatis.</p></div><span class="newsroom-mark">TOKOCV2 <b>ESPORTS</b></span></div>
+<div class="esports-live-tools" style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;font-size:12px">
+<button type="button" class="filter-pill active" data-esport-filter="Semua">Semua</button><button type="button" class="filter-pill" data-esport-filter="Mobile Legends">Mobile Legends</button><button type="button" class="filter-pill" data-esport-filter="PUBG Mobile">PUBG Mobile</button><button type="button" class="filter-pill" data-esport-filter="Valorant">Valorant</button><button type="button" class="filter-pill" data-esport-filter="Football Esports">Football Esports</button>
 </div>
-<div class="esports-rail-hint"><span>GESER UNTUK MELIHAT LIPUTAN LAIN</span><span>←   →</span></div>
+<div id="esportsLiveStatus" role="status" style="font-size:11px;color:#8793a4;margin:6px 0 12px">Memuat berita esports terbaru…</div>
+<div aria-label="Berita dan turnamen esports terbaru" class="esports-news-rail" id="esportsLiveFeed"><article class="esports-story"><div class="story-body"><h3>Memuat berita terbaru…</h3><p>Berita game dan esports Indonesia serta internasional sedang diambil.</p></div></article></div>
+<div class="esports-rail-hint"><span>BERITA DARI BERBAGAI SUMBER · KLIK UNTUK MEMBACA</span><span>↻ OTOMATIS</span></div>
 </section>
 <section class="promo-banner" id="promo">
 <div class="promo-symbol">✦</div><div><span class="section-kicker">TOP UP FAVORITMU</span><h2>Siap lanjut bermain?</h2><p>Pilih game favoritmu dan temukan produk yang tersedia.</p></div><a class="primary-cta" href="#games">Pilih Game <span>→</span></a>
@@ -1609,6 +1608,18 @@ loadDigiflazzProducts();
 /* Hanya judul Produk Digital yang dibuat kuning; kartu/kolom tetap putih. */
 #beranda #digital .section-heading h2{color:#facc15!important}
 </style>
+<script id="tokocv2-esports-auto">
+(()=>{
+ const root=document.getElementById('esportsLiveFeed'); if(!root)return;
+ const status=document.getElementById('esportsLiveStatus'); let allItems=[],active='Semua';
+ const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const date=s=>{const d=new Date(s);return isNaN(d)?'Tanggal tidak tersedia':d.toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});};
+ function render(){const items=active==='Semua'?allItems:allItems.filter(x=>x.category===active);root.innerHTML=items.length?items.map(x=>`<article class="esports-story"><div class="story-art" style="height:105px;background:linear-gradient(135deg,#26354c,#71445c)"><span class="story-code">${esc(x.category)}</span><b>🎮</b><small>${esc(x.source)}</small></div><div class="story-body"><span class="story-tag">${esc(x.category)} · ${esc(date(x.pubDate))}</span><h3>${esc(x.title)}</h3><p>${esc(x.description||('Berita terbaru dari '+x.source+'. Buka artikel untuk membaca informasi selengkapnya.'))}</p><a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">Baca berita <b>→</b></a></div></article>`).join(''):'<p>Belum ada berita untuk kategori ini. Coba kategori lain.</p>';}
+ document.querySelectorAll('[data-esport-filter]').forEach(b=>b.addEventListener('click',()=>{active=b.dataset.esportFilter;document.querySelectorAll('[data-esport-filter]').forEach(x=>x.classList.toggle('active',x===b));render();}));
+ async function load(){try{const r=await fetch('/api/esports-news',{headers:{'Accept':'application/json'}});if(!r.ok)throw Error('HTTP '+r.status);const data=await r.json();allItems=data.items||[];render();status.textContent=allItems.length?'Diperbarui otomatis · '+allItems.length+' berita · '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}):'Belum ada berita dari sumber saat ini.';}catch(e){status.textContent='Berita otomatis belum tersambung. Pastikan endpoint /api/esports-news.js sudah dipasang di Vercel.';root.innerHTML='<p style="padding:12px">Feed belum tersedia. Coba muat ulang beberapa saat lagi.</p>';}}
+ load();setInterval(load,15*60*1000);
+})();
+</script>
 </body>
 </html>
 <style id="tokocv2-solid-deep-purple-final">
