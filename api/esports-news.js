@@ -4,24 +4,25 @@ const FEEDS = [
   ['Mobile Legends', 'https://news.google.com/rss/search?q=Mobile+Legends+esports+tournament&hl=en-US&gl=US&ceid=US:en'],
   ['PUBG Mobile', 'https://news.google.com/rss/search?q=PUBG+Mobile+esports&hl=id&gl=ID&ceid=ID:id'],
   ['PUBG Mobile', 'https://news.google.com/rss/search?q=PUBG+Mobile+esports+tournament&hl=en-US&gl=US&ceid=US:en'],
-  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+esports&hl=id&gl=ID&ceid=ID:id'],
-  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+Champions+Tour&hl=en-US&gl=US&ceid=US:en'],
-  ['Football Esports', 'https://news.google.com/rss/search?q=football+esports+FC+Mobile+eFootball&hl=id&gl=ID&ceid=ID:id'],
-  ['Football Esports', 'https://news.google.com/rss/search?q=EA+Sports+FC+esports+eFootball+tournament&hl=en-US&gl=US&ceid=US:en'],
-  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+gaming+tournament&hl=en-US&gl=US&ceid=US:en']
+  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+esports&hl=en-US&gl=US&ceid=US:en'],
+  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+tournament&hl=en-US&gl=US&ceid=US:en'],
+  ['Football Esports', 'https://news.google.com/rss/search?q=football+esports+gaming&hl=en-US&gl=US&ceid=US:en'],
+  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+gaming+tournament&hl=id&gl=ID&ceid=ID:id'],
+  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+news&hl=en-US&gl=US&ceid=US:en']
 ];
 
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36';
+
 function decodeEntities(value = '') {
-  return value
+  return String(value)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&#(\d+);/g, (_, n) =>
-      String.fromCodePoint(Number(n))
-    )
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
     .replace(/&#x([0-9a-f]+);/gi, (_, n) =>
       String.fromCodePoint(parseInt(n, 16))
     );
@@ -34,79 +35,64 @@ function cleanText(value = '') {
     .trim();
 }
 
-function getRawTag(block, name) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  const match = block.match(new RegExp(
-    '<' + escaped + '(?:\\s[^>]*)?>([\\s\\S]*?)</' +
-    escaped + '>',
-    'i'
-  ));
-
-  return match ? match[1] : '';
-}
-
-function getTag(block, name) {
-  return cleanText(getRawTag(block, name));
+function getTag(block, tag) {
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = block.match(
+    new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}\\s*>`, 'i')
+  );
+  return match ? decodeEntities(match[1].trim()) : '';
 }
 
 function getAttributes(tag) {
   const attrs = {};
-  const regex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  const regex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["']([^"']*)["']/g;
   let match;
 
   while ((match = regex.exec(tag)) !== null) {
-    attrs[match[1].toLowerCase()] =
-      decodeEntities(match[2] ?? match[3] ?? '');
+    attrs[match[1].toLowerCase()] = decodeEntities(match[2]);
   }
 
   return attrs;
 }
 
 function validImage(url, baseUrl) {
-  if (!url) return '';
+  if (!url) return null;
 
   try {
-    const image = new URL(url.trim(), baseUrl);
+    const clean = decodeEntities(url).trim();
+    if (!clean || /^(data:|blob:|javascript:)/i.test(clean)) return null;
 
-    if (!['http:', 'https:'].includes(image.protocol)) {
-      return '';
-    }
+    const absolute = new URL(clean, baseUrl).href;
 
-    if (/^data:/i.test(url)) return '';
+    if (!/^https?:\/\//i.test(absolute)) return null;
+    if (/google\.com\/(images|logos)/i.test(absolute)) return null;
 
-    return image.href;
-  } catch (_) {
-    return '';
+    return absolute;
+  } catch {
+    return null;
   }
 }
 
 function extractImageFromHTML(html, baseUrl) {
-  if (!html) return '';
+  if (!html) return null;
 
-  const decoded = decodeEntities(html);
-
-  // 1. Cari gambar dari Open Graph dan Twitter Card.
-  const metaTags = decoded.match(/<meta\b[^>]*>/gi) || [];
+  // 1. Open Graph dan Twitter Card
+  const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
 
   for (const tag of metaTags) {
     const attrs = getAttributes(tag);
-
-    const property = (
-      attrs.property ||
-      attrs.name ||
-      attrs.itemprop ||
-      ''
-    ).toLowerCase();
+    const key = (attrs.property || attrs.name || '').toLowerCase();
 
     if (
-      property === 'og:image' ||
-      property === 'og:image:url' ||
-      property === 'twitter:image' ||
-      property === 'twitter:image:src'
+      [
+        'og:image',
+        'og:image:url',
+        'twitter:image',
+        'twitter:image:src'
+      ].includes(key)
     ) {
       const image = validImage(
-        attrs.content || attrs.src,
+        attrs.content || attrs['data-src'],
         baseUrl
       );
 
@@ -114,280 +100,315 @@ function extractImageFromHTML(html, baseUrl) {
     }
   }
 
-  // 2. Cari gambar dari JSON-LD artikel.
-  const scripts = decoded.match(
-    /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
-  ) || [];
+  // 2. JSON-LD
+  const scripts =
+    html.match(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
 
-  function findJsonImage(data) {
-    if (!data) return '';
+  function findJsonImage(value) {
+    if (!value) return null;
 
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        const result = findJsonImage(item);
-        if (result) return result;
-      }
-      return '';
+    if (typeof value === 'string') {
+      return validImage(value, baseUrl);
     }
 
-    if (typeof data === 'object') {
-      const image = data.image || data.thumbnailUrl;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = findJsonImage(item);
+        if (found) return found;
+      }
+    }
 
-      if (typeof image === 'string') return image;
-
-      if (Array.isArray(image)) {
-        for (const item of image) {
-          const result = findJsonImage({ image: item });
-          if (result) return result;
+    if (typeof value === 'object') {
+      for (const key of ['image', 'thumbnailUrl', 'thumbnail']) {
+        if (value[key]) {
+          const found = findJsonImage(value[key]);
+          if (found) return found;
         }
       }
 
-      if (image && typeof image === 'object') {
-        const result = image.url || image.contentUrl;
-        if (typeof result === 'string') return result;
-      }
-
       for (const key of ['@graph', 'mainEntity', 'mainEntityOfPage']) {
-        const result = findJsonImage(data[key]);
-        if (result) return result;
+        if (value[key]) {
+          const found = findJsonImage(value[key]);
+          if (found) return found;
+        }
       }
     }
 
-    return '';
+    return null;
   }
 
   for (const script of scripts) {
     try {
-      const jsonText = script
+      const json = script
         .replace(/^<script\b[^>]*>/i, '')
         .replace(/<\/script>$/i, '');
 
-      const data = JSON.parse(jsonText);
-      const image = validImage(findJsonImage(data), baseUrl);
-
-      if (image) return image;
-    } catch (_) {}
+      const found = findJsonImage(JSON.parse(decodeEntities(json)));
+      if (found) return found;
+    } catch {}
   }
 
-  // 3. Cari gambar dari tag IMG.
-  const imageTags = decoded.match(/<img\b[^>]*>/gi) || [];
+  // 3. Gambar artikel biasa dan lazy-loaded
+  const images = html.match(/<img\b[^>]*>/gi) || [];
 
-  for (const tag of imageTags) {
+  for (const tag of images) {
     const attrs = getAttributes(tag);
 
-    const candidates = [
-      attrs['data-src'],
-      attrs['data-lazy-src'],
-      attrs['data-original'],
-      attrs.src
-    ];
+    const candidate =
+      attrs['data-src'] ||
+      attrs['data-lazy-src'] ||
+      attrs['data-original'] ||
+      attrs.src;
 
-    for (const candidate of candidates) {
-      const image = validImage(candidate, baseUrl);
+    if (!candidate) continue;
 
-      if (
-        image &&
-        !/logo|icon|avatar|sprite|placeholder|blank/i.test(image)
-      ) {
-        return image;
-      }
+    const description = [
+      attrs.alt,
+      attrs.class,
+      attrs.id,
+      candidate
+    ].join(' ').toLowerCase();
+
+    if (
+      /logo|avatar|icon|sprite|placeholder|blank|tracking|pixel/.test(description)
+    ) {
+      continue;
     }
+
+    const image = validImage(candidate, baseUrl);
+    if (image) return image;
   }
 
-  return '';
+  return null;
 }
 
 function extractRssImage(block) {
-  // Cari media:thumbnail, media:content, dan enclosure.
-  const mediaTags = block.match(
-    /<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi
-  ) || [];
+  const mediaTags =
+    block.match(/<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi) || [];
 
   for (const tag of mediaTags) {
     const attrs = getAttributes(tag);
-
     const image = validImage(
-      attrs.url || attrs.href
+      attrs.url || attrs.href,
+      'https://news.google.com'
     );
 
     if (image) return image;
   }
 
-  // Cari gambar di description dan content:encoded.
-  const description = getRawTag(block, 'description');
-  const content = getRawTag(block, 'content:encoded');
+  const html = [
+    getTag(block, 'description'),
+    getTag(block, 'content:encoded')
+  ].join(' ');
 
-  const image1 = extractImageFromHTML(description);
-  if (image1) return image1;
+  const imageTags = html.match(/<img\b[^>]*>/gi) || [];
 
-  const image2 = extractImageFromHTML(content);
-  if (image2) return image2;
+  for (const tag of imageTags) {
+    const attrs = getAttributes(tag);
+    const image = validImage(
+      attrs.src || attrs['data-src'] || attrs['data-original'],
+      'https://news.google.com'
+    );
 
-  // Cari gambar di seluruh item RSS.
-  return extractImageFromHTML(block);
+    if (image) return image;
+  }
+
+  return null;
 }
 
 function parseFeed(xml, category) {
-  const chunks = xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
+  const items = xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
 
-  return chunks.map(block => ({
-    category,
-    title: getTag(block, 'title'),
-    link: getTag(block, 'link'),
-    description: getTag(block, 'description').slice(0, 260),
-    source: getTag(block, 'source') || 'Google News',
-    pubDate: getTag(block, 'pubDate'),
-    imageUrl: extractRssImage(block) || ''
-  })).filter(item =>
-    item.title &&
-    /^https?:\/\//i.test(item.link)
-  );
+  return items.map(block => {
+    const title = cleanText(getTag(block, 'title'));
+    const link = cleanText(getTag(block, 'link'));
+    const description = getTag(block, 'description');
+    const source = cleanText(getTag(block, 'source'));
+    const pubDate = cleanText(getTag(block, 'pubDate'));
+
+    return {
+      category,
+      title,
+      link,
+      description,
+      source,
+      pubDate,
+      imageUrl: extractRssImage(block)
+    };
+  }).filter(item => item.title && item.link);
 }
 
-async function fetchWithTimeout(url, options = {}, timeout = 6000) {
+async function fetchWithTimeout(url, timeout = 7000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
 
   try {
     return await fetch(url, {
-      ...options,
       signal: controller.signal,
-      redirect: 'follow'
+      redirect: 'follow',
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+      }
     });
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function getArticleImage(articleUrl) {
+function isGoogleNews(url) {
   try {
-    const response = await fetchWithTimeout(
-      articleUrl,
-      {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-          'Accept':
-            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
-        }
-      },
-      5500
-    );
+    return new URL(url).hostname.endsWith('news.google.com');
+  } catch {
+    return false;
+  }
+}
 
-    if (!response.ok) return '';
+function findPublisherLink(html, baseUrl) {
+  const links = html.match(/<a\b[^>]*>/gi) || [];
 
-    const contentType =
-      response.headers.get('content-type') || '';
+  for (const tag of links) {
+    const attrs = getAttributes(tag);
+    const href = attrs.href;
 
-    if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
-      return '';
+    if (!href) continue;
+
+    try {
+      const absolute = new URL(href, baseUrl);
+
+      if (
+        /^https?:$/.test(absolute.protocol) &&
+        !absolute.hostname.endsWith('google.com') &&
+        !absolute.hostname.endsWith('googleusercontent.com')
+      ) {
+        return absolute.href;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function getArticleImage(googleNewsUrl) {
+  try {
+    // Langkah 1: ikuti pengalihan Google News
+    const googleResponse = await fetchWithTimeout(googleNewsUrl, 7000);
+
+    if (!googleResponse.ok) return null;
+
+    const googleHtml = await googleResponse.text();
+    let articleUrl = googleResponse.url || googleNewsUrl;
+
+    // Langkah 2: jika masih di Google News, cari tautan penerbit
+    if (isGoogleNews(articleUrl)) {
+      const publisherLink = findPublisherLink(
+        googleHtml,
+        articleUrl
+      );
+
+      if (publisherLink) {
+        articleUrl = publisherLink;
+      } else {
+        return extractImageFromHTML(googleHtml, articleUrl);
+      }
     }
 
-    const html = await response.text();
+    // Langkah 3: ambil halaman artikel asli
+    const articleResponse = await fetchWithTimeout(articleUrl, 7000);
 
-    return extractImageFromHTML(
-      html,
-      response.url || articleUrl
-    );
-  } catch (_) {
-    return '';
+    if (!articleResponse.ok) return null;
+
+    const contentType =
+      articleResponse.headers.get('content-type') || '';
+
+    if (!contentType.includes('text/html')) return null;
+
+    const articleHtml = await articleResponse.text();
+    const finalUrl = articleResponse.url || articleUrl;
+
+    return extractImageFromHTML(articleHtml, finalUrl);
+  } catch (error) {
+    return null;
   }
 }
 
 async function fillMissingImages(items) {
-  const candidates = items
-    .filter(item => !item.imageUrl)
-    .slice(0, 20);
-
+  const targets = items.filter(item => !item.imageUrl);
   let index = 0;
 
-  async function worker() {
-    while (index < candidates.length) {
-      const item = candidates[index++];
+  const workers = Array.from({ length: 5 }, async () => {
+    while (index < targets.length) {
+      const item = targets[index++];
 
-      const image = await getArticleImage(item.link);
-
-      if (image) {
-        item.imageUrl = image;
-      }
+      item.imageUrl = await getArticleImage(item.link);
     }
-  }
+  });
 
-  await Promise.all(
-    Array.from({ length: 5 }, () => worker())
-  );
-
+  await Promise.all(workers);
   return items;
 }
 
-module.exports = async function (req, res) {
-  res.setHeader(
-    'Cache-Control',
-    's-maxage=600, stale-while-revalidate=1800'
-  );
-
-  res.setHeader('Access-Control-Allow-Origin', '*');
-
+export default async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({
-      error: 'Method not allowed',
-      items: []
+      success: false,
+      message: 'Method not allowed'
     });
   }
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader(
+    'Cache-Control',
+    'public, s-maxage=300, stale-while-revalidate=600'
+  );
 
   try {
     const results = await Promise.all(
       FEEDS.map(async ([category, url]) => {
         try {
-          const response = await fetchWithTimeout(
-            url,
-            {
-              headers: {
-                'User-Agent': 'TOKOCV2-EsportsNews/2.0'
-              }
-            },
-            7000
-          );
+          const response = await fetchWithTimeout(url, 8000);
 
           if (!response.ok) return [];
 
           const xml = await response.text();
-
           return parseFeed(xml, category);
-        } catch (_) {
+        } catch {
           return [];
         }
       })
     );
 
-    const seen = new Set();
+    const unique = new Map();
 
-    const items = results.flat()
-      .filter(item => {
-        if (seen.has(item.link)) return false;
+    for (const item of results.flat()) {
+      const key = item.link;
 
-        seen.add(item.link);
-        return true;
+      if (!unique.has(key)) {
+        unique.set(key, item);
+      }
+    }
+
+    const items = [...unique.values()]
+      .sort((a, b) => {
+        return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
       })
-      .sort((a, b) =>
-        new Date(b.pubDate) - new Date(a.pubDate)
-      )
-      .slice(0, 40);
+      .slice(0, 30);
 
     await fillMissingImages(items);
 
     return res.status(200).json({
       updatedAt: new Date().toISOString(),
+      total: items.length,
       items
     });
-
   } catch (error) {
-    console.error('TOKOCV2 NEWS ERROR:', error);
+    console.error('Esports news error:', error);
 
     return res.status(500).json({
-      error: 'Feed esports sementara tidak tersedia',
-      items: []
+      success: false,
+      message: 'Gagal mengambil berita esports'
     });
   }
-};
-    
+    }
+        
