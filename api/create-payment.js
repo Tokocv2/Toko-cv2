@@ -91,13 +91,8 @@ export default async function handler(req, res) {
 
     const modal = Number(product.price);
 
-    const untung =
-      modal < 5000 ? 1000 :
-      modal <= 20000 ? 1500 :
-      modal <= 50000 ? 2000 :
-      modal <= 100000 ? 3000 : 5000;
-
-    const hargaJual = modal + untung;
+    // HITUNG HARGA JUAL: MARKUP 13%
+    const hargaJual = Math.round(modal * 1.13);
 
     const orderId =
       "TOKOCV2-" + crypto.randomUUID();
