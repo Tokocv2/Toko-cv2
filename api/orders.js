@@ -1,4 +1,3 @@
-
 export default async function handler(req, res) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SECRET_KEY;
@@ -24,6 +23,7 @@ export default async function handler(req, res) {
           }
         }
       );
+
       if (!response.ok) {
         return res.status(response.status).json({
           success: false,
@@ -45,9 +45,9 @@ export default async function handler(req, res) {
   }
 
   // SIMPAN PESANAN
-  if (req.method === "POST") { 
-    try {    
-         // VERIFIKASI AKUN PELANGGAN
+  if (req.method === "POST") {
+    try {
+      // VERIFIKASI AKUN PELANGGAN
       const authHeader = req.headers.authorization;
 
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -77,6 +77,7 @@ export default async function handler(req, res) {
       }
 
       const user = await userResponse.json();
+
       const {
         sku,
         player_id,
@@ -100,7 +101,7 @@ export default async function handler(req, res) {
         });
       }
 
-      // Ambil daftar produk dari endpoint Digiflazz
+      // AMBIL DAFTAR PRODUK
       if (!process.env.VERCEL_URL) {
         return res.status(500).json({
           success: false,
@@ -149,13 +150,9 @@ export default async function handler(req, res) {
         });
       }
 
-      const untung =
-        modal < 5000 ? 1000 :
-        modal <= 20000 ? 1500 :
-        modal <= 50000 ? 2000 :
-        modal <= 100000 ? 3000 : 5000;
-
-      const hargaJual = modal + untung;
+      // HITUNG HARGA JUAL: MARKUP 13%
+      const hargaJual = Math.round(modal * 1.13);
+      const untung = hargaJual - modal;
 
       const crypto = await import("node:crypto");
       const orderId = "TCV2-" + crypto.randomUUID();
@@ -167,6 +164,7 @@ export default async function handler(req, res) {
         ? `${playerId}|${playerServer}`
         : playerId;
 
+      // SIMPAN PESANAN KE SUPABASE
       const saveResponse = await fetch(
         `${baseUrl}/rest/v1/orders`,
         {
@@ -214,7 +212,7 @@ export default async function handler(req, res) {
         topup_status: "pending"
       });
 
-      } catch (error) { 
+    } catch (error) {
       return res.status(500).json({
         success: false,
         message: "Terjadi kesalahan saat membuat pesanan",
@@ -227,4 +225,5 @@ export default async function handler(req, res) {
     success: false,
     message: "Method not allowed"
   });
-}
+  }
+
