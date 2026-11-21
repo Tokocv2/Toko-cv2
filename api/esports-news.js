@@ -56,18 +56,37 @@ function getAttributes(tag) {
 }
 
 function validImage(url, baseUrl) {
-  if (!url) return null;
+  if (!url || typeof url !== 'string') return null;
 
   try {
     const clean = decodeEntities(url).trim();
-    if (!clean || /^(data:|blob:|javascript:)/i.test(clean)) return null;
 
-    const absolute = new URL(clean, baseUrl).href;
+    if (
+      !clean ||
+      /^(data:|blob:|javascript:)/i.test(clean) ||
+      /^(#|\/\/$)/.test(clean)
+    ) {
+      return null;
+    }
 
-    if (!/^https?:\/\//i.test(absolute)) return null;
-    if (/google\.com\/(images|logos)/i.test(absolute)) return null;
+    const absolute = new URL(clean, baseUrl);
 
-    return absolute;
+    if (!['http:', 'https:'].includes(absolute.protocol)) return null;
+
+    const fullUrl = absolute.href;
+    const hostname = absolute.hostname.toLowerCase();
+    const path = absolute.pathname.toLowerCase();
+
+    if (
+      hostname === 'news.google.com' ||
+      /\/(logos?|icons?|avatars?|favicons?)\//i.test(path) ||
+      /(logo|avatar|favicon|sprite|placeholder|blank|pixel|tracking)/i.test(path) ||
+      /\.(svg)(\?|$)/i.test(fullUrl)
+    ) {
+      return null;
+    }
+
+    return fullUrl;
   } catch {
     return null;
   }
@@ -76,6 +95,21 @@ function validImage(url, baseUrl) {
 function extractImageFromHTML(html, baseUrl) {
   if (!html) return null;
 
+  const candidates = [];
+
+  function addCandidate(url, score) {
+    const image = validImage(url, baseUrl);
+    if (!image) return;
+
+    const existing = candidates.find(item => item.url === image);
+
+    if (existing) {
+      existing.score = Math.max(existing.score, score);
+    } else {
+      candidates.push({ url: image, score });
+    }
+  }
+
   // 1. Open Graph dan Twitter Card
   const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
 
@@ -83,58 +117,49 @@ function extractImageFromHTML(html, baseUrl) {
     const attrs = getAttributes(tag);
     const key = (attrs.property || attrs.name || '').toLowerCase();
 
-    if (
-      [
-        'og:image',
-        'og:image:url',
-        'twitter:image',
-        'twitter:image:src'
-      ].includes(key)
+    if (key === 'og:image' || key === 'og:image:url') {
+      addCandidate(attrs.content, 100);
+    } else if (
+      key === 'twitter:image' ||
+      key === 'twitter:image:src'
     ) {
-      const image = validImage(
-        attrs.content || attrs['data-src'],
-        baseUrl
-      );
-
-      if (image) return image;
+      addCandidate(attrs.content, 90);
     }
   }
 
   // 2. JSON-LD
-  const scripts =
-    html.match(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  const scripts = html.match(
+    /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
+  ) || [];
 
-  function findJsonImage(value) {
-    if (!value) return null;
+  function scanJson(value) {
+    if (!value) return;
 
     if (typeof value === 'string') {
-      return validImage(value, baseUrl);
+      addCandidate(value, 80);
+      return;
     }
 
     if (Array.isArray(value)) {
-      for (const item of value) {
-        const found = findJsonImage(item);
-        if (found) return found;
-      }
+      value.forEach(scanJson);
+      return;
     }
 
     if (typeof value === 'object') {
       for (const key of ['image', 'thumbnailUrl', 'thumbnail']) {
-        if (value[key]) {
-          const found = findJsonImage(value[key]);
-          if (found) return found;
+        const entry = value[key];
+
+        if (typeof entry === 'string') {
+          addCandidate(entry, 80);
+        } else if (entry) {
+          scanJson(entry);
         }
       }
 
       for (const key of ['@graph', 'mainEntity', 'mainEntityOfPage']) {
-        if (value[key]) {
-          const found = findJsonImage(value[key]);
-          if (found) return found;
-        }
+        if (value[key]) scanJson(value[key]);
       }
     }
-
-    return null;
   }
 
   for (const script of scripts) {
@@ -143,24 +168,22 @@ function extractImageFromHTML(html, baseUrl) {
         .replace(/^<script\b[^>]*>/i, '')
         .replace(/<\/script>$/i, '');
 
-      const found = findJsonImage(JSON.parse(decodeEntities(json)));
-      if (found) return found;
+      scanJson(JSON.parse(decodeEntities(json)));
     } catch {}
   }
 
-  // 3. Gambar artikel biasa dan lazy-loaded
-  const images = html.match(/<img\b[^>]*>/gi) || [];
+  // 3. Gambar artikel dan lazy loading
+  const imgTags = html.match(/<img\b[^>]*>/gi) || [];
 
-  for (const tag of images) {
+  for (const tag of imgTags) {
     const attrs = getAttributes(tag);
 
     const candidate =
       attrs['data-src'] ||
       attrs['data-lazy-src'] ||
       attrs['data-original'] ||
-      attrs.src;
-
-    if (!candidate) continue;
+      attrs.src ||
+      attrs.srcset?.split(',')[0]?.trim().split(/\s+/)[0];
 
     const description = [
       attrs.alt,
@@ -170,16 +193,17 @@ function extractImageFromHTML(html, baseUrl) {
     ].join(' ').toLowerCase();
 
     if (
-      /logo|avatar|icon|sprite|placeholder|blank|tracking|pixel/.test(description)
+      /logo|avatar|icon|sprite|placeholder|blank|tracking|pixel|favicon/.test(description)
     ) {
       continue;
     }
 
-    const image = validImage(candidate, baseUrl);
-    if (image) return image;
+    addCandidate(candidate, 50);
   }
 
-  return null;
+  candidates.sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.url || null;
 }
 
 function extractRssImage(block) {
@@ -188,6 +212,7 @@ function extractRssImage(block) {
 
   for (const tag of mediaTags) {
     const attrs = getAttributes(tag);
+
     const image = validImage(
       attrs.url || attrs.href,
       'https://news.google.com'
@@ -205,6 +230,17 @@ function extractRssImage(block) {
 
   for (const tag of imageTags) {
     const attrs = getAttributes(tag);
+
+    const description = [
+      attrs.alt,
+      attrs.class,
+      attrs.id
+    ].join(' ').toLowerCase();
+
+    if (/logo|avatar|icon|sprite|placeholder|blank|pixel/.test(description)) {
+      continue;
+    }
+
     const image = validImage(
       attrs.src || attrs['data-src'] || attrs['data-original'],
       'https://news.google.com'
@@ -290,45 +326,47 @@ function findPublisherLink(html, baseUrl) {
   return null;
 }
 
-async function getArticleImage(googleNewsUrl) {
+async function getArticleImage(articleUrl) {
   try {
-    // Langkah 1: ikuti pengalihan Google News
-    const googleResponse = await fetchWithTimeout(googleNewsUrl, 7000);
+    const response = await fetchWithTimeout(articleUrl, 7000);
 
-    if (!googleResponse.ok) return null;
+    if (!response.ok) return null;
 
-    const googleHtml = await googleResponse.text();
-    let articleUrl = googleResponse.url || googleNewsUrl;
+    const finalUrl = response.url || articleUrl;
 
-    // Langkah 2: jika masih di Google News, cari tautan penerbit
-    if (isGoogleNews(articleUrl)) {
-      const publisherLink = findPublisherLink(
-        googleHtml,
-        articleUrl
-      );
+    if (isGoogleNews(finalUrl)) {
+      const googleHtml = await response.text();
+      const publisherLink = findPublisherLink(googleHtml, finalUrl);
 
-      if (publisherLink) {
-        articleUrl = publisherLink;
-      } else {
-        return extractImageFromHTML(googleHtml, articleUrl);
+      if (!publisherLink) {
+        return extractImageFromHTML(googleHtml, finalUrl);
       }
+
+      const publisherResponse = await fetchWithTimeout(publisherLink, 7000);
+
+      if (!publisherResponse.ok) return null;
+
+      const contentType =
+        publisherResponse.headers.get('content-type') || '';
+
+      if (!contentType.includes('text/html')) return null;
+
+      const publisherHtml = await publisherResponse.text();
+
+      return extractImageFromHTML(
+        publisherHtml,
+        publisherResponse.url || publisherLink
+      );
     }
 
-    // Langkah 3: ambil halaman artikel asli
-    const articleResponse = await fetchWithTimeout(articleUrl, 7000);
-
-    if (!articleResponse.ok) return null;
-
-    const contentType =
-      articleResponse.headers.get('content-type') || '';
+    const contentType = response.headers.get('content-type') || '';
 
     if (!contentType.includes('text/html')) return null;
 
-    const articleHtml = await articleResponse.text();
-    const finalUrl = articleResponse.url || articleUrl;
+    const html = await response.text();
 
-    return extractImageFromHTML(articleHtml, finalUrl);
-  } catch (error) {
+    return extractImageFromHTML(html, finalUrl);
+  } catch {
     return null;
   }
 }
@@ -346,6 +384,7 @@ async function fillMissingImages(items) {
   });
 
   await Promise.all(workers);
+
   return items;
 }
 
@@ -372,6 +411,7 @@ export default async function handler(req, res) {
           if (!response.ok) return [];
 
           const xml = await response.text();
+
           return parseFeed(xml, category);
         } catch {
           return [];
@@ -382,10 +422,8 @@ export default async function handler(req, res) {
     const unique = new Map();
 
     for (const item of results.flat()) {
-      const key = item.link;
-
-      if (!unique.has(key)) {
-        unique.set(key, item);
+      if (!unique.has(item.link)) {
+        unique.set(item.link, item);
       }
     }
 
@@ -410,5 +448,5 @@ export default async function handler(req, res) {
       message: 'Gagal mengambil berita esports'
     });
   }
-    }
-        
+      }
+                                      
