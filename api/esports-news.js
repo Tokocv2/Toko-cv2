@@ -287,7 +287,24 @@ function extractRssImage(block) {
 
   return null;
 }
-  
+  async function fetchWithTimeout(url, timeout = 7000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+      }
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  }
 
 function isGoogleNews(url) {
   try {
