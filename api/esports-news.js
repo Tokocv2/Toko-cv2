@@ -665,5 +665,5 @@ export default async function handler(req, res) {
       message: 'Gagal mengambil berita esports'
     });
   }
-        }
+}
       
