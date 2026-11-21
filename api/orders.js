@@ -12,7 +12,7 @@ export default async function handler(req, res) {
 
   const baseUrl = supabaseUrl.replace(/\/+$/, "");
 
-  // TES KONEKSI
+  // TES KONEKSI SUPABASE
   if (req.method === "GET") {
     try {
       const response = await fetch(
@@ -26,10 +26,14 @@ export default async function handler(req, res) {
       );
 
       if (!response.ok) {
+        const detail = await response.text();
+
+        console.error("SUPABASE_CONNECTION_ERROR:", detail);
+
         return res.status(response.status).json({
           success: false,
           message: "Supabase menolak permintaan",
-          detail: await response.text()
+          detail
         });
       }
 
@@ -37,10 +41,14 @@ export default async function handler(req, res) {
         success: true,
         message: "Koneksi TOKOCV2 ke Supabase berhasil"
       });
+
     } catch (error) {
+      console.error("SUPABASE_CONNECTION_ERROR:", error);
+
       return res.status(500).json({
         success: false,
-        message: "Koneksi Supabase gagal"
+        message: "Koneksi Supabase gagal",
+        detail: error.message
       });
     }
   }
@@ -48,7 +56,7 @@ export default async function handler(req, res) {
   // SIMPAN PESANAN
   if (req.method === "POST") {
     try {
-      // LOGIN OPSIONAL
+      // LOGIN OPSIONAL / GUEST
       let user = null;
       const authHeader = req.headers.authorization;
 
@@ -89,6 +97,7 @@ export default async function handler(req, res) {
         user = await userResponse.json();
       }
 
+      // VALIDASI DATA PESANAN
       const {
         sku,
         player_id,
@@ -103,8 +112,11 @@ export default async function handler(req, res) {
         !player_id.trim() ||
         typeof game !== "string" ||
         !game.trim() ||
-        (player_server !== undefined &&
-          typeof player_server !== "string")
+        (
+          player_server !== undefined &&
+          player_server !== null &&
+          typeof player_server !== "string"
+        )
       ) {
         return res.status(400).json({
           success: false,
@@ -112,8 +124,10 @@ export default async function handler(req, res) {
         });
       }
 
-      // AMBIL DAFTAR PRODUK
-      if (!process.env.VERCEL_URL) {
+      // AMBIL DAFTAR PRODUK DIGIFLAZZ
+      const vercelUrl = process.env.VERCEL_URL;
+
+      if (!vercelUrl) {
         return res.status(500).json({
           success: false,
           message: "Konfigurasi URL produk belum tersedia"
@@ -121,20 +135,32 @@ export default async function handler(req, res) {
       }
 
       const productsResponse = await fetch(
-        `https://${process.env.VERCEL_URL}/api/products`,
-        { cache: "no-store" }
+        `https://${vercelUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "")}/api/products`,
+        {
+          cache: "no-store"
+        }
       );
 
       if (!productsResponse.ok) {
+        const detail = await productsResponse.text();
+
+        console.error("PRODUCT_FETCH_ERROR:", detail);
+
         return res.status(503).json({
           success: false,
-          message: "Daftar produk belum tersedia"
+          message: "Daftar produk belum tersedia",
+          detail
         });
       }
 
       const productsResult = await productsResponse.json();
 
       if (!Array.isArray(productsResult.data)) {
+        console.error(
+          "INVALID_PRODUCT_DATA:",
+          productsResult
+        );
+
         return res.status(503).json({
           success: false,
           message: "Data produk tidak valid"
@@ -152,6 +178,7 @@ export default async function handler(req, res) {
         });
       }
 
+      // VALIDASI HARGA MODAL
       const modal = Number(product.price);
 
       if (!Number.isFinite(modal) || modal <= 0) {
@@ -165,6 +192,7 @@ export default async function handler(req, res) {
       const hargaJual = Math.round(modal * 1.13);
       const untung = hargaJual - modal;
 
+      // BUAT ID PESANAN
       const crypto = await import("node:crypto");
       const orderId = "TCV2-" + crypto.randomUUID();
 
@@ -203,9 +231,23 @@ export default async function handler(req, res) {
         }
       );
 
-      const savedData = await saveResponse.json();
+      // BACA HASIL SUPABASE
+      const saveText = await saveResponse.text();
+
+      let savedData;
+
+      try {
+        savedData = saveText ? JSON.parse(saveText) : null;
+      } catch {
+        savedData = saveText;
+      }
 
       if (!saveResponse.ok) {
+        console.error(
+          "SUPABASE_INSERT_ERROR:",
+          savedData
+        );
+
         return res.status(500).json({
           success: false,
           message: "Gagal menyimpan pesanan",
@@ -213,6 +255,7 @@ export default async function handler(req, res) {
         });
       }
 
+      // PESANAN BERHASIL DISIMPAN
       return res.status(201).json({
         success: true,
         message: "Pesanan berhasil disimpan",
@@ -225,6 +268,9 @@ export default async function handler(req, res) {
       });
 
     } catch (error) {
+      // CATAT ERROR UNTUK PEMERIKSAAN VERCEL
+      console.error("ORDERS_ERROR:", error);
+
       return res.status(500).json({
         success: false,
         message: "Terjadi kesalahan saat membuat pesanan",
@@ -233,8 +279,9 @@ export default async function handler(req, res) {
     }
   }
 
+  // METODE SELAIN GET DAN POST DITOLAK
   return res.status(405).json({
     success: false,
     message: "Method not allowed"
   });
-  }
+}
