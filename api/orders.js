@@ -1,7 +1,8 @@
-
 export default async function handler(req, res) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SECRET_KEY;
+
+  const PRODUCTS_URL = "https://toko-cv2.vercel.app/api/products";
 
   if (!supabaseUrl || !supabaseKey) {
     return res.status(500).json({
@@ -55,8 +56,12 @@ export default async function handler(req, res) {
 
   // SIMPAN PESANAN
   if (req.method === "POST") {
+    let currentStep = "memulai pesanan";
+
     try {
       // LOGIN OPSIONAL / GUEST
+      currentStep = "memeriksa login";
+
       let user = null;
       const authHeader = req.headers.authorization;
 
@@ -98,6 +103,8 @@ export default async function handler(req, res) {
       }
 
       // VALIDASI DATA PESANAN
+      currentStep = "memvalidasi data pesanan";
+
       const {
         sku,
         player_id,
@@ -124,48 +131,48 @@ export default async function handler(req, res) {
         });
       }
 
-      // AMBIL DAFTAR PRODUK DIGIFLAZZ
-      const vercelUrl = process.env.VERCEL_URL;
+      // MENGAMBIL PRODUK
+      currentStep = "mengambil daftar produk";
 
-      if (!vercelUrl) {
-        return res.status(500).json({
-          success: false,
-          message: "Konfigurasi URL produk belum tersedia"
-        });
-      }
+      const productsResponse = await fetch(PRODUCTS_URL, {
+        cache: "no-store"
+      });
 
-      const productsResponse = await fetch(
-        `https://${vercelUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "")}/api/products`,
-        {
-          cache: "no-store"
-        }
-      );
+      const productsText = await productsResponse.text();
 
       if (!productsResponse.ok) {
-        const detail = await productsResponse.text();
-
-        console.error("PRODUCT_FETCH_ERROR:", detail);
+        console.error("PRODUCT_FETCH_ERROR:", productsText);
 
         return res.status(503).json({
           success: false,
           message: "Daftar produk belum tersedia",
-          detail
+          detail: productsText.slice(0, 1000)
         });
       }
 
-      const productsResult = await productsResponse.json();
+      let productsResult;
+
+      try {
+        productsResult = JSON.parse(productsText);
+      } catch (error) {
+        console.error("PRODUCT_JSON_ERROR:", productsText.slice(0, 1000));
+
+        return res.status(503).json({
+          success: false,
+          message: "Respons daftar produk bukan JSON yang valid",
+          detail: productsText.slice(0, 500)
+        });
+      }
 
       if (!Array.isArray(productsResult.data)) {
-        console.error(
-          "INVALID_PRODUCT_DATA:",
-          productsResult
-        );
-
         return res.status(503).json({
           success: false,
           message: "Data produk tidak valid"
         });
       }
+
+      // MENCARI SKU
+      currentStep = "mencari produk";
 
       const product = productsResult.data.find(
         p => p.buyer_sku_code === sku.trim()
@@ -174,11 +181,14 @@ export default async function handler(req, res) {
       if (!product) {
         return res.status(400).json({
           success: false,
-          message: "Produk tidak ditemukan"
+          message: "Produk tidak ditemukan",
+          detail: `SKU ${sku.trim()} tidak ditemukan`
         });
       }
 
-      // VALIDASI HARGA MODAL
+      // VALIDASI HARGA
+      currentStep = "menghitung harga";
+
       const modal = Number(product.price);
 
       if (!Number.isFinite(modal) || modal <= 0) {
@@ -188,11 +198,13 @@ export default async function handler(req, res) {
         });
       }
 
-      // HITUNG HARGA JUAL: MARKUP 13%
+      // MARKUP 13%
       const hargaJual = Math.round(modal * 1.13);
       const untung = hargaJual - modal;
 
-      // BUAT ID PESANAN
+      // MEMBUAT ID PESANAN
+      currentStep = "membuat ID pesanan";
+
       const crypto = await import("node:crypto");
       const orderId = "TCV2-" + crypto.randomUUID();
 
@@ -203,7 +215,9 @@ export default async function handler(req, res) {
         ? `${playerId}|${playerServer}`
         : playerId;
 
-      // SIMPAN PESANAN KE SUPABASE
+      // MENYIMPAN KE SUPABASE
+      currentStep = "menyimpan pesanan ke Supabase";
+
       const saveResponse = await fetch(
         `${baseUrl}/rest/v1/orders`,
         {
@@ -231,7 +245,6 @@ export default async function handler(req, res) {
         }
       );
 
-      // BACA HASIL SUPABASE
       const saveText = await saveResponse.text();
 
       let savedData;
@@ -243,10 +256,7 @@ export default async function handler(req, res) {
       }
 
       if (!saveResponse.ok) {
-        console.error(
-          "SUPABASE_INSERT_ERROR:",
-          savedData
-        );
+        console.error("SUPABASE_INSERT_ERROR:", savedData);
 
         return res.status(500).json({
           success: false,
@@ -255,7 +265,7 @@ export default async function handler(req, res) {
         });
       }
 
-      // PESANAN BERHASIL DISIMPAN
+      // BERHASIL
       return res.status(201).json({
         success: true,
         message: "Pesanan berhasil disimpan",
@@ -268,20 +278,24 @@ export default async function handler(req, res) {
       });
 
     } catch (error) {
-      // CATAT ERROR UNTUK PEMERIKSAAN VERCEL
-      console.error("ORDERS_ERROR:", error);
+      console.error("ORDERS_ERROR:", {
+        step: currentStep,
+        message: error.message,
+        stack: error.stack
+      });
 
       return res.status(500).json({
         success: false,
         message: "Terjadi kesalahan saat membuat pesanan",
+        step: currentStep,
         detail: error.message
       });
     }
   }
 
-  // METODE SELAIN GET DAN POST DITOLAK
   return res.status(405).json({
     success: false,
     message: "Method not allowed"
   });
 }
+
