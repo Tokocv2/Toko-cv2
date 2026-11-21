@@ -1,49 +1,24 @@
+
 const FEEDS = [
-  [
-    'Mobile Legends',
-    'https://news.google.com/rss/search?q=Mobile+Legends+esports&hl=id&gl=ID&ceid=ID:id'
-  ],
-  [
-    'Mobile Legends',
-    'https://news.google.com/rss/search?q=Mobile+Legends+esports+tournament&hl=en-US&gl=US&ceid=US:en'
-  ],
-  [
-    'PUBG Mobile',
-    'https://news.google.com/rss/search?q=PUBG+Mobile+esports&hl=id&gl=ID&ceid=ID:id'
-  ],
-  [
-    'PUBG Mobile',
-    'https://news.google.com/rss/search?q=PUBG+Mobile+esports+tournament&hl=en-US&gl=US&ceid=US:en'
-  ],
-  [
-    'Valorant',
-    'https://news.google.com/rss/search?q=Valorant+esports&hl=en-US&gl=US&ceid=US:en'
-  ],
-  [
-    'Valorant',
-    'https://news.google.com/rss/search?q=Valorant+tournament&hl=en-US&gl=US&ceid=US:en'
-  ],
-  [
-    'Football Esports',
-    'https://news.google.com/rss/search?q=football+esports+gaming&hl=en-US&gl=US&ceid=US:en'
-  ],
-  [
-    'Esports Lainnya',
-    'https://news.google.com/rss/search?q=esports+gaming+tournament&hl=id&gl=ID&ceid=ID:id'
-  ],
-  [
-    'Esports Lainnya',
-    'https://news.google.com/rss/search?q=esports+news&hl=en-US&gl=US&ceid=US:en'
-  ]
+  ['Mobile Legends', 'https://news.google.com/rss/search?q=Mobile+Legends+esports&hl=id&gl=ID&ceid=ID:id'],
+  ['Mobile Legends', 'https://news.google.com/rss/search?q=Mobile+Legends+esports+tournament&hl=en-US&gl=US&ceid=US:en'],
+  ['PUBG Mobile', 'https://news.google.com/rss/search?q=PUBG+Mobile+esports&hl=id&gl=ID&ceid=ID:id'],
+  ['PUBG Mobile', 'https://news.google.com/rss/search?q=PUBG+Mobile+esports+tournament&hl=en-US&gl=US&ceid=US:en'],
+  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+esports&hl=en-US&gl=US&ceid=US:en'],
+  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+tournament&hl=en-US&gl=US&ceid=US:en'],
+  ['Football Esports', 'https://news.google.com/rss/search?q=football+esports+gaming&hl=en-US&gl=US&ceid=US:en'],
+  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+gaming+tournament&hl=id&gl=ID&ceid=ID:id'],
+  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+news&hl=en-US&gl=US&ceid=US:en']
 ];
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36';
 
 const MAX_NEWS = 30;
-const FEED_TIMEOUT = 10000;
-const ARTICLE_TIMEOUT = 8000;
-const IMAGE_WORKERS = 3;
+const FEED_TIMEOUT = 9000;
+const ARTICLE_TIMEOUT = 4500;
+const IMAGE_LOOKUP_LIMIT = 8;
+const IMAGE_WORKERS = 2;
 
 /* =====================================
    TEXT DAN XML
@@ -86,7 +61,6 @@ function escapeRegex(value) {
 
 function getTag(block, tag) {
   const escaped = escapeRegex(tag);
-
   const match = block.match(
     new RegExp(
       `<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}\\s*>`,
@@ -99,7 +73,6 @@ function getTag(block, tag) {
 
 function getAttributes(tag) {
   const attrs = {};
-
   const regex =
     /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
@@ -121,9 +94,7 @@ function validImage(url, baseUrl) {
   if (!url || typeof url !== 'string') return null;
 
   try {
-    const clean = decodeEntities(url)
-      .trim()
-      .replace(/&amp;/g, '&');
+    const clean = decodeEntities(url).trim();
 
     if (
       !clean ||
@@ -132,44 +103,44 @@ function validImage(url, baseUrl) {
       return null;
     }
 
-    const absolute = new URL(clean, baseUrl);
+    const parsed = new URL(clean, baseUrl);
 
-    if (!['http:', 'https:'].includes(absolute.protocol)) {
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
       return null;
     }
 
-    const host = absolute.hostname.toLowerCase();
-    const path = absolute.pathname.toLowerCase();
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
 
-    // Hindari gambar generik Google News
-    if (
-      host === 'news.google.com' ||
-      host === 'google.com' ||
-      host.endsWith('.google.com') ||
-      host === 'gstatic.com' ||
-      host.endsWith('.gstatic.com') ||
-      host === 'googleusercontent.com' ||
-      host.endsWith('.googleusercontent.com')
-    ) {
-      return null;
-    }
+    const blockedHosts = [
+      'news.google.com',
+      'google.com',
+      'gstatic.com',
+      'googleusercontent.com'
+    ];
 
     if (
-      /logo|favicon|avatar|placeholder|default-image|no-image|sprite|tracking|pixel/.test(
-        path
+      blockedHosts.some(
+        domain => host === domain || host.endsWith('.' + domain)
       )
     ) {
       return null;
     }
 
-    return absolute.href;
+    if (
+      /logo|favicon|avatar|placeholder|default-image|no-image|sprite|tracking|pixel|blank/.test(path)
+    ) {
+      return null;
+    }
+
+    return parsed.href;
   } catch {
     return null;
   }
 }
 
 /* =====================================
-   EKSTRAK GAMBAR DARI HTML ARTIKEL
+   EKSTRAK GAMBAR HTML
 ===================================== */
 
 function extractImageFromHTML(html, baseUrl) {
@@ -178,8 +149,9 @@ function extractImageFromHTML(html, baseUrl) {
   const candidates = [];
 
   function addCandidate(url, score) {
-    const image = validImage(url, baseUrl);
+    if (typeof url !== 'string') return;
 
+    const image = validImage(url, baseUrl);
     if (!image) return;
 
     const existing = candidates.find(
@@ -189,14 +161,11 @@ function extractImageFromHTML(html, baseUrl) {
     if (existing) {
       existing.score = Math.max(existing.score, score);
     } else {
-      candidates.push({
-        url: image,
-        score
-      });
+      candidates.push({ url: image, score });
     }
   }
 
-  // 1. Open Graph dan Twitter Card
+  // Open Graph dan Twitter
   const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
 
   for (const tag of metaTags) {
@@ -210,32 +179,31 @@ function extractImageFromHTML(html, baseUrl) {
     ).toLowerCase();
 
     if (key === 'og:image' || key === 'og:image:url') {
-      addCandidate(attrs.content, 100);
+      addCandidate(attrs.content, 110);
     }
 
     if (
       key === 'twitter:image' ||
       key === 'twitter:image:src'
     ) {
-      addCandidate(attrs.content, 90);
+      addCandidate(attrs.content, 100);
     }
 
     if (key === 'image') {
-      addCandidate(attrs.content, 70);
+      addCandidate(attrs.content, 80);
     }
   }
 
-  // 2. JSON-LD
-  const scripts =
-    html.match(
-      /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
-    ) || [];
+  // JSON-LD termasuk ImageObject.url
+  const scripts = html.match(
+    /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
+  ) || [];
 
   function scanJsonImage(value, depth = 0) {
-    if (!value || depth > 8) return;
+    if (!value || depth > 10) return;
 
     if (typeof value === 'string') {
-      addCandidate(value, 80);
+      addCandidate(value, 90);
       return;
     }
 
@@ -248,18 +216,21 @@ function extractImageFromHTML(html, baseUrl) {
 
     if (typeof value !== 'object') return;
 
+    // ImageObject bisa berbentuk { url: "..." }
     for (const key of [
-      'image',
+      'url',
+      'contentUrl',
       'thumbnailUrl',
-      'thumbnail',
-      'contentUrl'
+      '@id'
     ]) {
-      if (value[key]) {
-        scanJsonImage(value[key], depth + 1);
+      if (value[key] && typeof value[key] === 'string') {
+        addCandidate(value[key], 90);
       }
     }
 
     for (const key of [
+      'image',
+      'thumbnail',
       '@graph',
       'mainEntity',
       'mainEntityOfPage',
@@ -280,11 +251,11 @@ function extractImageFromHTML(html, baseUrl) {
 
       scanJsonImage(JSON.parse(jsonText));
     } catch {
-      // Lewati JSON yang rusak
+      // Lewati JSON yang tidak valid
     }
   }
 
-  // 3. Gambar artikel dan lazy loading
+  // Gambar HTML dan lazy loading
   const imageTags = html.match(/<img\b[^>]*>/gi) || [];
 
   for (const tag of imageTags) {
@@ -295,14 +266,10 @@ function extractImageFromHTML(html, baseUrl) {
       attrs.title,
       attrs.class,
       attrs.id
-    ]
-      .join(' ')
-      .toLowerCase();
+    ].join(' ').toLowerCase();
 
     if (
-      /logo|avatar|icon|sprite|placeholder|blank|pixel|advertisement/.test(
-        description
-      )
+      /logo|avatar|icon|sprite|placeholder|blank|pixel|advertisement/.test(description)
     ) {
       continue;
     }
@@ -314,23 +281,31 @@ function extractImageFromHTML(html, baseUrl) {
       attrs.src;
 
     addCandidate(imageUrl, 50);
+
+    // Ambil kandidat dari srcset
+    if (attrs.srcset) {
+      const srcsetItems = attrs.srcset.split(',');
+
+      for (const item of srcsetItems) {
+        const src = item.trim().split(/\s+/)[0];
+        addCandidate(src, 45);
+      }
+    }
   }
 
-  // Pilih gambar dengan prioritas tertinggi
   candidates.sort((a, b) => b.score - a.score);
 
   return candidates[0]?.url || null;
 }
 
 /* =====================================
-   EKSTRAK GAMBAR DARI RSS
+   EKSTRAK GAMBAR RSS
 ===================================== */
 
 function extractRssImage(block) {
-  const mediaTags =
-    block.match(
-      /<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi
-    ) || [];
+  const mediaTags = block.match(
+    /<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi
+  ) || [];
 
   for (const tag of mediaTags) {
     const attrs = getAttributes(tag);
@@ -343,13 +318,12 @@ function extractRssImage(block) {
     if (image) return image;
   }
 
-  const description = [
+  const html = [
     getTag(block, 'description'),
     getTag(block, 'content:encoded')
   ].join(' ');
 
-  const imageTags =
-    description.match(/<img\b[^>]*>/gi) || [];
+  const imageTags = html.match(/<img\b[^>]*>/gi) || [];
 
   for (const tag of imageTags) {
     const attrs = getAttributes(tag);
@@ -368,12 +342,13 @@ function extractRssImage(block) {
 }
 
 /* =====================================
-   PARSE RSS GOOGLE NEWS
+   PARSE RSS
 ===================================== */
 
 function parseFeed(xml, category) {
-  const blocks =
-    xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
+  const blocks = xml.match(
+    /<item\b[\s\S]*?<\/item>/gi
+  ) || [];
 
   const results = [];
 
@@ -386,8 +361,6 @@ function parseFeed(xml, category) {
 
     if (!title || !link) continue;
 
-    let safeLink;
-
     try {
       const parsed = new URL(link);
 
@@ -395,20 +368,18 @@ function parseFeed(xml, category) {
         continue;
       }
 
-      safeLink = parsed.href;
+      results.push({
+        category,
+        title,
+        link: parsed.href,
+        description,
+        source,
+        pubDate,
+        imageUrl: extractRssImage(block)
+      });
     } catch {
       continue;
     }
-
-    results.push({
-      category,
-      title,
-      link: safeLink,
-      description,
-      source,
-      pubDate,
-      imageUrl: extractRssImage(block)
-    });
   }
 
   return results;
@@ -439,15 +410,12 @@ async function fetchTextWithTimeout(url, timeout = 7000) {
       }
     });
 
-    const text = await response.text();
-
     return {
       ok: response.ok,
       status: response.status,
       url: response.url || url,
-      contentType:
-        response.headers.get('content-type') || '',
-      text
+      contentType: response.headers.get('content-type') || '',
+      text: await response.text()
     };
   } finally {
     clearTimeout(timer);
@@ -466,41 +434,69 @@ function isGoogleNews(url) {
   }
 }
 
-function findPublisherLink(html, baseUrl) {
-  const links = html.match(/<a\b[^>]*>/gi) || [];
+function findPublisherLink(html, baseUrl, title = '') {
+  const links = html.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) || [];
+
+  const titleWords = cleanText(title)
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(word => word.length > 3);
+
+  const candidates = [];
 
   for (const tag of links) {
-    const attrs = getAttributes(tag);
-    const href = attrs.href;
+    const openingTag = tag.match(/^<a\b[^>]*>/i)?.[0] || '';
+    const attrs = getAttributes(openingTag);
 
-    if (!href) continue;
+    if (!attrs.href) continue;
 
     try {
-      const parsed = new URL(href, baseUrl);
+      const parsed = new URL(attrs.href, baseUrl);
       const host = parsed.hostname.toLowerCase();
 
       if (
-        ['http:', 'https:'].includes(parsed.protocol) &&
-        host !== 'news.google.com' &&
-        host !== 'google.com' &&
-        !host.endsWith('.google.com') &&
-        !host.endsWith('.googleusercontent.com')
+        !['http:', 'https:'].includes(parsed.protocol) ||
+        host === 'news.google.com' ||
+        host === 'google.com' ||
+        host.endsWith('.google.com') ||
+        host.endsWith('.googleusercontent.com') ||
+        host.endsWith('.gstatic.com')
       ) {
-        return parsed.href;
+        continue;
       }
+
+      // Hindari tautan homepage penerbit
+      if (parsed.pathname === '/' && !parsed.search) {
+        continue;
+      }
+
+      const anchorText = cleanText(tag).toLowerCase();
+
+      let score = 0;
+
+      for (const word of titleWords) {
+        if (anchorText.includes(word)) score++;
+      }
+
+      candidates.push({
+        url: parsed.href,
+        score
+      });
     } catch {
-      // Lewati link yang tidak valid
+      // Lewati URL tidak valid
     }
   }
 
-  return null;
+  candidates.sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.url || null;
 }
 
 /* =====================================
-   AMBIL GAMBAR ARTIKEL ASLI
+   AMBIL GAMBAR ARTIKEL
 ===================================== */
 
-async function getArticleImage(articleUrl) {
+async function getArticleImage(articleUrl, title) {
   try {
     const googlePage = await fetchTextWithTimeout(
       articleUrl,
@@ -512,27 +508,23 @@ async function getArticleImage(articleUrl) {
     let finalUrl = googlePage.url;
     let html = googlePage.text;
 
-    // Jika masih Google News, cari link penerbit
-    if (isGoogleNews(finalUrl)) {
+    // Jika Google langsung mengarahkan ke penerbit
+    if (!isGoogleNews(finalUrl)) {
+      const image = extractImageFromHTML(html, finalUrl);
+      if (image) return image;
+    } else {
+      // Jika masih di Google News, cari halaman penerbit
       const publisherLink = findPublisherLink(
         html,
-        finalUrl
+        finalUrl,
+        title
       );
 
       if (!publisherLink) return null;
 
       finalUrl = publisherLink;
-    } else {
-      // Jika sudah diarahkan ke penerbit, gunakan HTML ini
-      const directImage = extractImageFromHTML(
-        html,
-        finalUrl
-      );
-
-      if (directImage) return directImage;
     }
 
-    // Ambil halaman penerbit
     const articlePage = await fetchTextWithTimeout(
       finalUrl,
       ARTICLE_TIMEOUT
@@ -541,9 +533,7 @@ async function getArticleImage(articleUrl) {
     if (!articlePage.ok) return null;
 
     if (
-      !articlePage.contentType.toLowerCase().includes(
-        'text/html'
-      )
+      !articlePage.contentType.toLowerCase().includes('text/html')
     ) {
       return null;
     }
@@ -558,13 +548,13 @@ async function getArticleImage(articleUrl) {
 }
 
 /* =====================================
-   ISI GAMBAR YANG MASIH KOSONG
+   ISI GAMBAR KOSONG
 ===================================== */
 
 async function fillMissingImages(items) {
-  const targets = items.filter(
-    item => !item.imageUrl
-  );
+  const targets = items
+    .filter(item => !item.imageUrl)
+    .slice(0, IMAGE_LOOKUP_LIMIT);
 
   let index = 0;
 
@@ -574,7 +564,8 @@ async function fillMissingImages(items) {
       const item = targets[current];
 
       item.imageUrl = await getArticleImage(
-        item.link
+        item.link,
+        item.title
       );
     }
   }
@@ -596,21 +587,9 @@ async function fillMissingImages(items) {
 ===================================== */
 
 export default async function handler(req, res) {
-  // CORS
-  res.setHeader(
-    'Access-Control-Allow-Origin',
-    '*'
-  );
-
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    'GET, OPTIONS'
-  );
-
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type'
-  );
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   res.setHeader(
     'Cache-Control',
@@ -629,7 +608,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Ambil semua RSS secara bersamaan
     const feedResults = await Promise.all(
       FEEDS.map(async ([category, feedUrl]) => {
         try {
@@ -640,10 +618,7 @@ export default async function handler(req, res) {
 
           if (!result.ok) return [];
 
-          return parseFeed(
-            result.text,
-            category
-          );
+          return parseFeed(result.text, category);
         } catch (error) {
           console.error(
             'RSS feed error:',
@@ -656,18 +631,15 @@ export default async function handler(req, res) {
       })
     );
 
-    // Gabungkan dan hilangkan duplikat
+    // Gabungkan berita dan hilangkan duplikat
     const unique = new Map();
 
     for (const item of feedResults.flat()) {
-      const key = item.link;
-
-      if (!unique.has(key)) {
-        unique.set(key, item);
+      if (!unique.has(item.link)) {
+        unique.set(item.link, item);
       }
     }
 
-    // Urutkan berita terbaru
     const items = [...unique.values()]
       .sort((a, b) => {
         const dateA = Date.parse(a.pubDate) || 0;
@@ -677,7 +649,6 @@ export default async function handler(req, res) {
       })
       .slice(0, MAX_NEWS);
 
-    // Cari gambar untuk berita yang belum punya gambar
     await fillMissingImages(items);
 
     return res.status(200).json({
@@ -687,14 +658,12 @@ export default async function handler(req, res) {
       items
     });
   } catch (error) {
-    console.error(
-      'Esports news API error:',
-      error
-    );
+    console.error('Esports news API error:', error);
 
     return res.status(500).json({
       success: false,
       message: 'Gagal mengambil berita esports'
     });
   }
-}
+        }
+      
