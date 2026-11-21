@@ -210,13 +210,32 @@ function extractRssImage(block) {
   const mediaTags =
     block.match(/<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi) || [];
 
+  
+function extractRssImage(block) {
+  const mediaTags =
+    block.match(/<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi) || [];
+
   for (const tag of mediaTags) {
     const attrs = getAttributes(tag);
+    const url = attrs.url || attrs.href;
 
-    const image = validImage(
-      attrs.url || attrs.href,
-      'https://news.google.com'
-    );
+    if (!url) continue;
+
+    // Hindari thumbnail generik Google News
+    try {
+      const host = new URL(url, 'https://news.google.com').hostname;
+
+      if (
+        host === 'lh3.googleusercontent.com' ||
+        host.endsWith('.googleusercontent.com')
+      ) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    const image = validImage(url, 'https://news.google.com');
 
     if (image) return image;
   }
@@ -241,57 +260,34 @@ function extractRssImage(block) {
       continue;
     }
 
-    const image = validImage(
-      attrs.src || attrs['data-src'] || attrs['data-original'],
-      'https://news.google.com'
-    );
+    const url =
+      attrs.src ||
+      attrs['data-src'] ||
+      attrs['data-original'];
+
+    if (!url) continue;
+
+    try {
+      const host = new URL(url, 'https://news.google.com').hostname;
+
+      if (
+        host === 'lh3.googleusercontent.com' ||
+        host.endsWith('.googleusercontent.com')
+      ) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    const image = validImage(url, 'https://news.google.com');
 
     if (image) return image;
   }
 
   return null;
 }
-
-function parseFeed(xml, category) {
-  const items = xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
-
-  return items.map(block => {
-    const title = cleanText(getTag(block, 'title'));
-    const link = cleanText(getTag(block, 'link'));
-    const description = getTag(block, 'description');
-    const source = cleanText(getTag(block, 'source'));
-    const pubDate = cleanText(getTag(block, 'pubDate'));
-
-    return {
-      category,
-      title,
-      link,
-      description,
-      source,
-      pubDate,
-      imageUrl: extractRssImage(block)
-    };
-  }).filter(item => item.title && item.link);
-}
-
-async function fetchWithTimeout(url, timeout = 7000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
-      }
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
+  
 
 function isGoogleNews(url) {
   try {
