@@ -1,3 +1,4 @@
+
 export default async function handler(req, res) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SECRET_KEY;
@@ -15,7 +16,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     try {
       const response = await fetch(
-        `${baseUrl}/rest/v1/orders?select=id&limit=0`,
+        `${baseUrl}/rest/v1/orders?select=order_id&limit=0`,
         {
           headers: {
             apikey: supabaseKey,
@@ -47,36 +48,46 @@ export default async function handler(req, res) {
   // SIMPAN PESANAN
   if (req.method === "POST") {
     try {
-      // VERIFIKASI AKUN PELANGGAN
+      // LOGIN OPSIONAL
+      let user = null;
       const authHeader = req.headers.authorization;
 
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({
-          success: false,
-          message: "Silakan login terlebih dahulu"
-        });
-      }
-
-      const accessToken = authHeader.slice(7);
-
-      const userResponse = await fetch(
-        `${baseUrl}/auth/v1/user`,
-        {
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${accessToken}`
-          }
+      if (authHeader) {
+        if (!authHeader.startsWith("Bearer ")) {
+          return res.status(401).json({
+            success: false,
+            message: "Format token login tidak valid"
+          });
         }
-      );
 
-      if (!userResponse.ok) {
-        return res.status(401).json({
-          success: false,
-          message: "Sesi login tidak valid. Silakan login kembali."
-        });
+        const accessToken = authHeader.slice(7).trim();
+
+        if (!accessToken) {
+          return res.status(401).json({
+            success: false,
+            message: "Token login kosong"
+          });
+        }
+
+        const userResponse = await fetch(
+          `${baseUrl}/auth/v1/user`,
+          {
+            headers: {
+              apikey: supabaseKey,
+              Authorization: `Bearer ${accessToken}`
+            }
+          }
+        );
+
+        if (!userResponse.ok) {
+          return res.status(401).json({
+            success: false,
+            message: "Sesi login tidak valid. Silakan login kembali."
+          });
+        }
+
+        user = await userResponse.json();
       }
-
-      const user = await userResponse.json();
 
       const {
         sku,
@@ -176,7 +187,7 @@ export default async function handler(req, res) {
             Prefer: "return=representation"
           },
           body: JSON.stringify({
-            user_id: user.id,
+            user_id: user ? user.id : null,
             order_id: orderId,
             customer_no: customerNo,
             player_id: playerId,
@@ -209,7 +220,8 @@ export default async function handler(req, res) {
         product_name: product.product_name,
         selling_price: hargaJual,
         payment_status: "pending",
-        topup_status: "pending"
+        topup_status: "pending",
+        customer_type: user ? "registered" : "guest"
       });
 
     } catch (error) {
@@ -226,4 +238,3 @@ export default async function handler(req, res) {
     message: "Method not allowed"
   });
   }
-
