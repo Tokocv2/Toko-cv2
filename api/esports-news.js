@@ -1,18 +1,53 @@
-
 const FEEDS = [
-  ['Mobile Legends', 'https://news.google.com/rss/search?q=Mobile+Legends+esports&hl=id&gl=ID&ceid=ID:id'],
-  ['Mobile Legends', 'https://news.google.com/rss/search?q=Mobile+Legends+esports+tournament&hl=en-US&gl=US&ceid=US:en'],
-  ['PUBG Mobile', 'https://news.google.com/rss/search?q=PUBG+Mobile+esports&hl=id&gl=ID&ceid=ID:id'],
-  ['PUBG Mobile', 'https://news.google.com/rss/search?q=PUBG+Mobile+esports+tournament&hl=en-US&gl=US&ceid=US:en'],
-  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+esports&hl=en-US&gl=US&ceid=US:en'],
-  ['Valorant', 'https://news.google.com/rss/search?q=Valorant+tournament&hl=en-US&gl=US&ceid=US:en'],
-  ['Football Esports', 'https://news.google.com/rss/search?q=football+esports+gaming&hl=en-US&gl=US&ceid=US:en'],
-  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+gaming+tournament&hl=id&gl=ID&ceid=ID:id'],
-  ['Esports Lainnya', 'https://news.google.com/rss/search?q=esports+news&hl=en-US&gl=US&ceid=US:en']
+  [
+    'Mobile Legends',
+    'https://news.google.com/rss/search?q=Mobile+Legends+esports&hl=id&gl=ID&ceid=ID:id'
+  ],
+  [
+    'Mobile Legends',
+    'https://news.google.com/rss/search?q=Mobile+Legends+esports+tournament&hl=en-US&gl=US&ceid=US:en'
+  ],
+  [
+    'PUBG Mobile',
+    'https://news.google.com/rss/search?q=PUBG+Mobile+esports&hl=id&gl=ID&ceid=ID:id'
+  ],
+  [
+    'PUBG Mobile',
+    'https://news.google.com/rss/search?q=PUBG+Mobile+esports+tournament&hl=en-US&gl=US&ceid=US:en'
+  ],
+  [
+    'Valorant',
+    'https://news.google.com/rss/search?q=Valorant+esports&hl=en-US&gl=US&ceid=US:en'
+  ],
+  [
+    'Valorant',
+    'https://news.google.com/rss/search?q=Valorant+tournament&hl=en-US&gl=US&ceid=US:en'
+  ],
+  [
+    'Football Esports',
+    'https://news.google.com/rss/search?q=football+esports+gaming&hl=en-US&gl=US&ceid=US:en'
+  ],
+  [
+    'Esports Lainnya',
+    'https://news.google.com/rss/search?q=esports+gaming+tournament&hl=id&gl=ID&ceid=ID:id'
+  ],
+  [
+    'Esports Lainnya',
+    'https://news.google.com/rss/search?q=esports+news&hl=en-US&gl=US&ceid=US:en'
+  ]
 ];
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36';
+
+const MAX_NEWS = 30;
+const FEED_TIMEOUT = 10000;
+const ARTICLE_TIMEOUT = 8000;
+const IMAGE_WORKERS = 3;
+
+/* =====================================
+   TEXT DAN XML
+===================================== */
 
 function decodeEntities(value = '') {
   return String(value)
@@ -22,10 +57,20 @@ function decodeEntities(value = '') {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) =>
-      String.fromCodePoint(parseInt(n, 16))
-    );
+    .replace(/&#(\d+);/g, (_, n) => {
+      try {
+        return String.fromCodePoint(Number(n));
+      } catch {
+        return '';
+      }
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => {
+      try {
+        return String.fromCodePoint(parseInt(n, 16));
+      } catch {
+        return '';
+      }
+    });
 }
 
 function cleanText(value = '') {
@@ -35,62 +80,97 @@ function cleanText(value = '') {
     .trim();
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function getTag(block, tag) {
-  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegex(tag);
+
   const match = block.match(
-    new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}\\s*>`, 'i')
+    new RegExp(
+      `<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}\\s*>`,
+      'i'
+    )
   );
+
   return match ? decodeEntities(match[1].trim()) : '';
 }
 
 function getAttributes(tag) {
   const attrs = {};
-  const regex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["']([^"']*)["']/g;
+
+  const regex =
+    /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
   let match;
 
   while ((match = regex.exec(tag)) !== null) {
-    attrs[match[1].toLowerCase()] = decodeEntities(match[2]);
+    attrs[match[1].toLowerCase()] =
+      decodeEntities(match[2] ?? match[3] ?? '');
   }
 
   return attrs;
 }
 
+/* =====================================
+   VALIDASI GAMBAR
+===================================== */
+
 function validImage(url, baseUrl) {
   if (!url || typeof url !== 'string') return null;
 
   try {
-    const clean = decodeEntities(url).trim();
+    const clean = decodeEntities(url)
+      .trim()
+      .replace(/&amp;/g, '&');
 
     if (
       !clean ||
-      /^(data:|blob:|javascript:)/i.test(clean) ||
-      /^(#|\/\/$)/.test(clean)
+      /^(data:|blob:|javascript:)/i.test(clean)
     ) {
       return null;
     }
 
     const absolute = new URL(clean, baseUrl);
 
-    if (!['http:', 'https:'].includes(absolute.protocol)) return null;
+    if (!['http:', 'https:'].includes(absolute.protocol)) {
+      return null;
+    }
 
-    const fullUrl = absolute.href;
-    const hostname = absolute.hostname.toLowerCase();
+    const host = absolute.hostname.toLowerCase();
     const path = absolute.pathname.toLowerCase();
 
+    // Hindari gambar generik Google News
     if (
-      hostname === 'news.google.com' ||
-      /\/(logos?|icons?|avatars?|favicons?)\//i.test(path) ||
-      /(logo|avatar|favicon|sprite|placeholder|blank|pixel|tracking)/i.test(path) ||
-      /\.(svg)(\?|$)/i.test(fullUrl)
+      host === 'news.google.com' ||
+      host === 'google.com' ||
+      host.endsWith('.google.com') ||
+      host === 'gstatic.com' ||
+      host.endsWith('.gstatic.com') ||
+      host === 'googleusercontent.com' ||
+      host.endsWith('.googleusercontent.com')
     ) {
       return null;
     }
 
-    return fullUrl;
+    if (
+      /logo|favicon|avatar|placeholder|default-image|no-image|sprite|tracking|pixel/.test(
+        path
+      )
+    ) {
+      return null;
+    }
+
+    return absolute.href;
   } catch {
     return null;
   }
 }
+
+/* =====================================
+   EKSTRAK GAMBAR DARI HTML ARTIKEL
+===================================== */
 
 function extractImageFromHTML(html, baseUrl) {
   if (!html) return null;
@@ -99,14 +179,20 @@ function extractImageFromHTML(html, baseUrl) {
 
   function addCandidate(url, score) {
     const image = validImage(url, baseUrl);
+
     if (!image) return;
 
-    const existing = candidates.find(item => item.url === image);
+    const existing = candidates.find(
+      item => item.url === image
+    );
 
     if (existing) {
       existing.score = Math.max(existing.score, score);
     } else {
-      candidates.push({ url: image, score });
+      candidates.push({
+        url: image,
+        score
+      });
     }
   }
 
@@ -115,25 +201,38 @@ function extractImageFromHTML(html, baseUrl) {
 
   for (const tag of metaTags) {
     const attrs = getAttributes(tag);
-    const key = (attrs.property || attrs.name || '').toLowerCase();
+
+    const key = (
+      attrs.property ||
+      attrs.name ||
+      attrs.itemprop ||
+      ''
+    ).toLowerCase();
 
     if (key === 'og:image' || key === 'og:image:url') {
       addCandidate(attrs.content, 100);
-    } else if (
+    }
+
+    if (
       key === 'twitter:image' ||
       key === 'twitter:image:src'
     ) {
       addCandidate(attrs.content, 90);
     }
+
+    if (key === 'image') {
+      addCandidate(attrs.content, 70);
+    }
   }
 
   // 2. JSON-LD
-  const scripts = html.match(
-    /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
-  ) || [];
+  const scripts =
+    html.match(
+      /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
+    ) || [];
 
-  function scanJson(value) {
-    if (!value) return;
+  function scanJsonImage(value, depth = 0) {
+    if (!value || depth > 8) return;
 
     if (typeof value === 'string') {
       addCandidate(value, 80);
@@ -141,110 +240,51 @@ function extractImageFromHTML(html, baseUrl) {
     }
 
     if (Array.isArray(value)) {
-      value.forEach(scanJson);
+      for (const item of value) {
+        scanJsonImage(item, depth + 1);
+      }
       return;
     }
 
-    if (typeof value === 'object') {
-      for (const key of ['image', 'thumbnailUrl', 'thumbnail']) {
-        const entry = value[key];
+    if (typeof value !== 'object') return;
 
-        if (typeof entry === 'string') {
-          addCandidate(entry, 80);
-        } else if (entry) {
-          scanJson(entry);
-        }
+    for (const key of [
+      'image',
+      'thumbnailUrl',
+      'thumbnail',
+      'contentUrl'
+    ]) {
+      if (value[key]) {
+        scanJsonImage(value[key], depth + 1);
       }
+    }
 
-      for (const key of ['@graph', 'mainEntity', 'mainEntityOfPage']) {
-        if (value[key]) scanJson(value[key]);
+    for (const key of [
+      '@graph',
+      'mainEntity',
+      'mainEntityOfPage',
+      'article',
+      'item'
+    ]) {
+      if (value[key]) {
+        scanJsonImage(value[key], depth + 1);
       }
     }
   }
 
   for (const script of scripts) {
     try {
-      const json = script
+      const jsonText = script
         .replace(/^<script\b[^>]*>/i, '')
         .replace(/<\/script>$/i, '');
 
-      scanJson(JSON.parse(decodeEntities(json)));
-    } catch {}
+      scanJsonImage(JSON.parse(jsonText));
+    } catch {
+      // Lewati JSON yang rusak
+    }
   }
 
   // 3. Gambar artikel dan lazy loading
-  const imgTags = html.match(/<img\b[^>]*>/gi) || [];
-
-  for (const tag of imgTags) {
-    const attrs = getAttributes(tag);
-
-    const candidate =
-      attrs['data-src'] ||
-      attrs['data-lazy-src'] ||
-      attrs['data-original'] ||
-      attrs.src ||
-      attrs.srcset?.split(',')[0]?.trim().split(/\s+/)[0];
-
-    const description = [
-      attrs.alt,
-      attrs.class,
-      attrs.id,
-      candidate
-    ].join(' ').toLowerCase();
-
-    if (
-      /logo|avatar|icon|sprite|placeholder|blank|tracking|pixel|favicon/.test(description)
-    ) {
-      continue;
-    }
-
-    addCandidate(candidate, 50);
-  }
-
-  candidates.sort((a, b) => b.score - a.score);
-
-  return candidates[0]?.url || null;
-}
-
-function extractRssImage(block) {
-  const mediaTags =
-    block.match(/<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi) || [];
-
-  
-function extractRssImage(block) {
-  const mediaTags =
-    block.match(/<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi) || [];
-
-  for (const tag of mediaTags) {
-    const attrs = getAttributes(tag);
-    const url = attrs.url || attrs.href;
-
-    if (!url) continue;
-
-    // Hindari thumbnail generik Google News
-    try {
-      const host = new URL(url, 'https://news.google.com').hostname;
-
-      if (
-        host === 'lh3.googleusercontent.com' ||
-        host.endsWith('.googleusercontent.com')
-      ) {
-        continue;
-      }
-    } catch {
-      continue;
-    }
-
-    const image = validImage(url, 'https://news.google.com');
-
-    if (image) return image;
-  }
-
-  const html = [
-    getTag(block, 'description'),
-    getTag(block, 'content:encoded')
-  ].join(' ');
-
   const imageTags = html.match(/<img\b[^>]*>/gi) || [];
 
   for (const tag of imageTags) {
@@ -252,63 +292,175 @@ function extractRssImage(block) {
 
     const description = [
       attrs.alt,
+      attrs.title,
       attrs.class,
       attrs.id
-    ].join(' ').toLowerCase();
+    ]
+      .join(' ')
+      .toLowerCase();
 
-    if (/logo|avatar|icon|sprite|placeholder|blank|pixel/.test(description)) {
+    if (
+      /logo|avatar|icon|sprite|placeholder|blank|pixel|advertisement/.test(
+        description
+      )
+    ) {
       continue;
     }
 
-    const url =
+    const imageUrl =
+      attrs['data-src'] ||
+      attrs['data-lazy-src'] ||
+      attrs['data-original'] ||
+      attrs.src;
+
+    addCandidate(imageUrl, 50);
+  }
+
+  // Pilih gambar dengan prioritas tertinggi
+  candidates.sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.url || null;
+}
+
+/* =====================================
+   EKSTRAK GAMBAR DARI RSS
+===================================== */
+
+function extractRssImage(block) {
+  const mediaTags =
+    block.match(
+      /<(?:media:thumbnail|media:content|enclosure)\b[^>]*>/gi
+    ) || [];
+
+  for (const tag of mediaTags) {
+    const attrs = getAttributes(tag);
+
+    const image = validImage(
+      attrs.url || attrs.href,
+      'https://news.google.com'
+    );
+
+    if (image) return image;
+  }
+
+  const description = [
+    getTag(block, 'description'),
+    getTag(block, 'content:encoded')
+  ].join(' ');
+
+  const imageTags =
+    description.match(/<img\b[^>]*>/gi) || [];
+
+  for (const tag of imageTags) {
+    const attrs = getAttributes(tag);
+
+    const image = validImage(
       attrs.src ||
       attrs['data-src'] ||
-      attrs['data-original'];
-
-    if (!url) continue;
-
-    try {
-      const host = new URL(url, 'https://news.google.com').hostname;
-
-      if (
-        host === 'lh3.googleusercontent.com' ||
-        host.endsWith('.googleusercontent.com')
-      ) {
-        continue;
-      }
-    } catch {
-      continue;
-    }
-
-    const image = validImage(url, 'https://news.google.com');
+      attrs['data-original'],
+      'https://news.google.com'
+    );
 
     if (image) return image;
   }
 
   return null;
 }
-  async function fetchWithTimeout(url, timeout = 7000) {
+
+/* =====================================
+   PARSE RSS GOOGLE NEWS
+===================================== */
+
+function parseFeed(xml, category) {
+  const blocks =
+    xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
+
+  const results = [];
+
+  for (const block of blocks) {
+    const title = cleanText(getTag(block, 'title'));
+    const link = cleanText(getTag(block, 'link'));
+    const description = getTag(block, 'description');
+    const source = cleanText(getTag(block, 'source'));
+    const pubDate = cleanText(getTag(block, 'pubDate'));
+
+    if (!title || !link) continue;
+
+    let safeLink;
+
+    try {
+      const parsed = new URL(link);
+
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        continue;
+      }
+
+      safeLink = parsed.href;
+    } catch {
+      continue;
+    }
+
+    results.push({
+      category,
+      title,
+      link: safeLink,
+      description,
+      source,
+      pubDate,
+      imageUrl: extractRssImage(block)
+    });
+  }
+
+  return results;
+}
+
+/* =====================================
+   FETCH DENGAN TIMEOUT
+===================================== */
+
+async function fetchTextWithTimeout(url, timeout = 7000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeout
+  );
 
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       signal: controller.signal,
       redirect: 'follow',
       headers: {
         'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+        'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language':
+          'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
       }
     });
+
+    const text = await response.text();
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      url: response.url || url,
+      contentType:
+        response.headers.get('content-type') || '',
+      text
+    };
   } finally {
     clearTimeout(timer);
   }
-  }
+}
+
+/* =====================================
+   GOOGLE NEWS DAN LINK PENERBIT
+===================================== */
 
 function isGoogleNews(url) {
   try {
-    return new URL(url).hostname.endsWith('news.google.com');
+    return new URL(url).hostname === 'news.google.com';
   } catch {
     return false;
   }
@@ -324,84 +476,151 @@ function findPublisherLink(html, baseUrl) {
     if (!href) continue;
 
     try {
-      const absolute = new URL(href, baseUrl);
+      const parsed = new URL(href, baseUrl);
+      const host = parsed.hostname.toLowerCase();
 
       if (
-        /^https?:$/.test(absolute.protocol) &&
-        !absolute.hostname.endsWith('google.com') &&
-        !absolute.hostname.endsWith('googleusercontent.com')
+        ['http:', 'https:'].includes(parsed.protocol) &&
+        host !== 'news.google.com' &&
+        host !== 'google.com' &&
+        !host.endsWith('.google.com') &&
+        !host.endsWith('.googleusercontent.com')
       ) {
-        return absolute.href;
+        return parsed.href;
       }
-    } catch {}
+    } catch {
+      // Lewati link yang tidak valid
+    }
   }
 
   return null;
 }
 
+/* =====================================
+   AMBIL GAMBAR ARTIKEL ASLI
+===================================== */
+
 async function getArticleImage(articleUrl) {
   try {
-    const response = await fetchWithTimeout(articleUrl, 7000);
+    const googlePage = await fetchTextWithTimeout(
+      articleUrl,
+      ARTICLE_TIMEOUT
+    );
 
-    if (!response.ok) return null;
+    if (!googlePage.ok) return null;
 
-    const finalUrl = response.url || articleUrl;
+    let finalUrl = googlePage.url;
+    let html = googlePage.text;
 
+    // Jika masih Google News, cari link penerbit
     if (isGoogleNews(finalUrl)) {
-      const googleHtml = await response.text();
-      const publisherLink = findPublisherLink(googleHtml, finalUrl);
-
-      if (!publisherLink) {
-        return extractImageFromHTML(googleHtml, finalUrl);
-      }
-
-      const publisherResponse = await fetchWithTimeout(publisherLink, 7000);
-
-      if (!publisherResponse.ok) return null;
-
-      const contentType =
-        publisherResponse.headers.get('content-type') || '';
-
-      if (!contentType.includes('text/html')) return null;
-
-      const publisherHtml = await publisherResponse.text();
-
-      return extractImageFromHTML(
-        publisherHtml,
-        publisherResponse.url || publisherLink
+      const publisherLink = findPublisherLink(
+        html,
+        finalUrl
       );
+
+      if (!publisherLink) return null;
+
+      finalUrl = publisherLink;
+    } else {
+      // Jika sudah diarahkan ke penerbit, gunakan HTML ini
+      const directImage = extractImageFromHTML(
+        html,
+        finalUrl
+      );
+
+      if (directImage) return directImage;
     }
 
-    const contentType = response.headers.get('content-type') || '';
+    // Ambil halaman penerbit
+    const articlePage = await fetchTextWithTimeout(
+      finalUrl,
+      ARTICLE_TIMEOUT
+    );
 
-    if (!contentType.includes('text/html')) return null;
+    if (!articlePage.ok) return null;
 
-    const html = await response.text();
+    if (
+      !articlePage.contentType.toLowerCase().includes(
+        'text/html'
+      )
+    ) {
+      return null;
+    }
 
-    return extractImageFromHTML(html, finalUrl);
+    return extractImageFromHTML(
+      articlePage.text,
+      articlePage.url || finalUrl
+    );
   } catch {
     return null;
   }
 }
 
+/* =====================================
+   ISI GAMBAR YANG MASIH KOSONG
+===================================== */
+
 async function fillMissingImages(items) {
-  const targets = items.filter(item => !item.imageUrl);
+  const targets = items.filter(
+    item => !item.imageUrl
+  );
+
   let index = 0;
 
-  const workers = Array.from({ length: 5 }, async () => {
+  async function worker() {
     while (index < targets.length) {
-      const item = targets[index++];
+      const current = index++;
+      const item = targets[current];
 
-      item.imageUrl = await getArticleImage(item.link);
+      item.imageUrl = await getArticleImage(
+        item.link
+      );
     }
-  });
+  }
+
+  const workers = Array.from(
+    {
+      length: Math.min(IMAGE_WORKERS, targets.length)
+    },
+    () => worker()
+  );
 
   await Promise.all(workers);
 
   return items;
 }
 
+/* =====================================
+   API HANDLER VERCEL
+===================================== */
+
 export default async function handler(req, res) {
+  // CORS
+  res.setHeader(
+    'Access-Control-Allow-Origin',
+    '*'
+  );
+
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET, OPTIONS'
+  );
+
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type'
+  );
+
+  res.setHeader(
+    'Cache-Control',
+    'public, s-maxage=300, stale-while-revalidate=600'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'GET') {
     return res.status(405).json({
       success: false,
@@ -409,57 +628,73 @@ export default async function handler(req, res) {
     });
   }
 
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader(
-    'Cache-Control',
-    'public, s-maxage=300, stale-while-revalidate=600'
-  );
-
   try {
-    const results = await Promise.all(
-      FEEDS.map(async ([category, url]) => {
+    // Ambil semua RSS secara bersamaan
+    const feedResults = await Promise.all(
+      FEEDS.map(async ([category, feedUrl]) => {
         try {
-          const response = await fetchWithTimeout(url, 8000);
+          const result = await fetchTextWithTimeout(
+            feedUrl,
+            FEED_TIMEOUT
+          );
 
-          if (!response.ok) return [];
+          if (!result.ok) return [];
 
-          const xml = await response.text();
+          return parseFeed(
+            result.text,
+            category
+          );
+        } catch (error) {
+          console.error(
+            'RSS feed error:',
+            category,
+            error.message
+          );
 
-          return parseFeed(xml, category);
-        } catch {
           return [];
         }
       })
     );
 
+    // Gabungkan dan hilangkan duplikat
     const unique = new Map();
 
-    for (const item of results.flat()) {
-      if (!unique.has(item.link)) {
-        unique.set(item.link, item);
+    for (const item of feedResults.flat()) {
+      const key = item.link;
+
+      if (!unique.has(key)) {
+        unique.set(key, item);
       }
     }
 
+    // Urutkan berita terbaru
     const items = [...unique.values()]
       .sort((a, b) => {
-        return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
-      })
-      .slice(0, 30);
+        const dateA = Date.parse(a.pubDate) || 0;
+        const dateB = Date.parse(b.pubDate) || 0;
 
+        return dateB - dateA;
+      })
+      .slice(0, MAX_NEWS);
+
+    // Cari gambar untuk berita yang belum punya gambar
     await fillMissingImages(items);
 
     return res.status(200).json({
+      success: true,
       updatedAt: new Date().toISOString(),
       total: items.length,
       items
     });
   } catch (error) {
-    console.error('Esports news error:', error);
+    console.error(
+      'Esports news API error:',
+      error
+    );
 
     return res.status(500).json({
       success: false,
       message: 'Gagal mengambil berita esports'
     });
   }
-      }
-                                      
+}
