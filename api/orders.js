@@ -2,9 +2,14 @@
 export default async function handler(req, res) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SECRET_KEY;
-  const midtransServerKey = process.env.MIDTRANS_SERVER_KEY;
 
-  const PRODUCTS_URL = "https://toko-cv2.vercel.app/api/products";
+  const midtransServerKey = (
+    process.env.MIDTRANS_SERVER_KEY || ""
+  ).trim();
+
+  const PRODUCTS_URL =
+    "https://toko-cv2.vercel.app/api/products";
+
   const MIDTRANS_URL =
     "https://app.sandbox.midtrans.com/snap/v1/transactions";
 
@@ -276,7 +281,9 @@ export default async function handler(req, res) {
               id: String(product.buyer_sku_code).slice(0, 50),
               price: hargaJual,
               quantity: 1,
-              name: String(product.product_name || game).slice(0, 50)
+              name: String(
+                product.product_name || game
+              ).slice(0, 50)
             }
           ]
         })
@@ -289,7 +296,9 @@ export default async function handler(req, res) {
       try {
         snapData = JSON.parse(snapText);
       } catch {
-        snapData = { message: snapText };
+        snapData = {
+          message: snapText
+        };
       }
 
       if (
@@ -297,7 +306,10 @@ export default async function handler(req, res) {
         !snapData.token ||
         !snapData.redirect_url
       ) {
-        console.error("MIDTRANS_ERROR:", snapData);
+        console.error("MIDTRANS_ERROR:", {
+          status: snapResponse.status,
+          response: snapData
+        });
 
         return res.status(502).json({
           success: false,
@@ -376,3 +388,4 @@ export default async function handler(req, res) {
     message: "Method not allowed"
   });
 }
+          
