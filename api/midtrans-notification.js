@@ -29,10 +29,8 @@ module.exports = async (req, res) => {
     const mode = MIDTRANS_MODE.toLowerCase();
 
     if (!["sandbox", "production"].includes(mode)) {
-      throw new Error("MIDTRANS_MODE harus sandbox atau production");
+      throw new Error("MIDTRANS_MODE tidak valid");
     }
-
-    const body = req.body || {};
 
     const {
       order_id,
@@ -41,7 +39,7 @@ module.exports = async (req, res) => {
       signature_key,
       transaction_status,
       fraud_status
-    } = body;
+    } = req.body || {};
 
     if (
       !order_id ||
@@ -55,9 +53,16 @@ module.exports = async (req, res) => {
       });
     }
 
-    // VERIFIKASI SIGNATURE MIDTRANS
-    // Menggunakan Server Key sesuai MIDTRANS_MODE.
-    const signature = crypto
+    // Validasi format signature SHA512
+    if (!/^[a-f0-9]{128}$/i.test(signature_key)) {
+      return res.status(401).json({
+        success: false,
+        message: "Format signature tidak valid"
+      });
+    }
+
+    // Verifikasi signature Midtrans
+    const expectedSignature = crypto
       .createHash("sha512")
       .update(
         order_id +
@@ -68,7 +73,7 @@ module.exports = async (req, res) => {
       .digest("hex");
 
     const received = Buffer.from(signature_key, "hex");
-    const expected = Buffer.from(signature, "hex");
+    const expected = Buffer.from(expectedSignature, "hex");
 
     if (
       received.length !== expected.length ||
@@ -89,9 +94,12 @@ module.exports = async (req, res) => {
     const baseUrl =
       `${SUPABASE_URL.replace(/\/+$/, "")}/rest/v1/orders`;
 
-    // CARI PESANAN
+    const encodedOrderId = encodeURIComponent(order_id);
+
+    // Cari pesanan
     const findResponse = await fetch(
-      `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&select=order_id,sku,customer_no,selling_price,payment_status,topup_status`,
+      `${baseUrl}?order_id=eq.${encodedOrderId}` +
+      `&select=order_id,sku,customer_no,selling_price,payment_status,topup_status`,
       { headers }
     );
 
@@ -110,7 +118,7 @@ module.exports = async (req, res) => {
 
     const order = orders[0];
 
-    // VALIDASI NOMINAL
+    // Validasi nominal
     if (
       !Number.isFinite(Number(gross_amount)) ||
       Number(gross_amount) !== Number(order.selling_price)
@@ -121,16 +129,17 @@ module.exports = async (req, res) => {
       });
     }
 
-    // TENTUKAN STATUS PEMBAYARAN
-    let paymentStatus = "pending";
-
-    if (
+    // Tentukan status pembayaran
+    const paid =
       transaction_status === "settlement" ||
       (
         transaction_status === "capture" &&
         fraud_status === "accept"
-      )
-    ) {
+      );
+
+    let paymentStatus = "pending";
+
+    if (paid) {
       paymentStatus = "paid";
     } else if (transaction_status === "expire") {
       paymentStatus = "expired";
@@ -141,8 +150,8 @@ module.exports = async (req, res) => {
       paymentStatus = "failed";
     }
 
-    // PEMBAYARAN BELUM BERHASIL
-    if (paymentStatus !== "paid") {
+    // Notifikasi pembayaran belum berhasil
+    if (!paid) {
       if (order.payment_status === "paid") {
         return res.status(200).json({
           success: true,
@@ -153,22 +162,25 @@ module.exports = async (req, res) => {
         });
       }
 
-      const update = await fetch(
-        `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&payment_status=eq.pending`,
-        {
-          method: "PATCH",
-          headers: {
-            ...headers,
-            Prefer: "return=minimal"
-          },
-          body: JSON.stringify({
-            payment_status: paymentStatus
-          })
-        }
-      );
+      if (paymentStatus !== "pending") {
+        const update = await fetch(
+          `${baseUrl}?order_id=eq.${encodedOrderId}` +
+          `&payment_status=eq.pending`,
+          {
+            method: "PATCH",
+            headers: {
+              ...headers,
+              Prefer: "return=minimal"
+            },
+            body: JSON.stringify({
+              payment_status: paymentStatus
+            })
+          }
+        );
 
-      if (!update.ok) {
-        throw new Error(await update.text());
+        if (!update.ok) {
+          throw new Error(await update.text());
+        }
       }
 
       return res.status(200).json({
@@ -178,10 +190,12 @@ module.exports = async (req, res) => {
       });
     }
 
-    // CATAT PEMBAYARAN BERHASIL
+    // Pembayaran berhasil:
+    // Izinkan pending, expired, atau failed menjadi paid
     if (order.payment_status !== "paid") {
       const paymentUpdate = await fetch(
-        `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&payment_status=eq.pending`,
+        `${baseUrl}?order_id=eq.${encodedOrderId}` +
+        `&payment_status=in.(pending,expired,failed)`,
         {
           method: "PATCH",
           headers: {
@@ -199,9 +213,12 @@ module.exports = async (req, res) => {
       }
     }
 
-    // KLAIM PESANAN PENDING SATU KALI
+    // Klaim atomik: hanya satu proses yang boleh mengirim top-up
     const claimResponse = await fetch(
-      `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&payment_status=eq.paid&topup_status=eq.pending&select=order_id,sku,customer_no`,
+      `${baseUrl}?order_id=eq.${encodedOrderId}` +
+      `&payment_status=eq.paid` +
+      `&topup_status=eq.pending` +
+      `&select=order_id,sku,customer_no`,
       {
         method: "PATCH",
         headers: {
@@ -230,7 +247,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // KIRIM TRANSAKSI DIGIFLAZZ
+    // Kirim transaksi Digiflazz satu kali
     let result;
 
     try {
@@ -240,14 +257,14 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "Hasil pengiriman belum dapat dipastikan; perlu pemeriksaan",
+        message: "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
         order_id,
         payment_status: "paid",
         topup_status: "processing"
       });
     }
 
-    // BACA HASIL DIGIFLAZZ
+    // Tentukan status top-up
     const digiflazzStatus = String(
       result?.status || ""
     ).toLowerCase();
@@ -260,9 +277,10 @@ module.exports = async (req, res) => {
       topupStatus = "failed";
     }
 
-    // SIMPAN HASIL KE SUPABASE
+    // Simpan hasil hanya jika masih processing
     const saveResult = await fetch(
-      `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&topup_status=eq.processing`,
+      `${baseUrl}?order_id=eq.${encodedOrderId}` +
+      `&topup_status=eq.processing`,
       {
         method: "PATCH",
         headers: {
@@ -279,13 +297,17 @@ module.exports = async (req, res) => {
       throw new Error(await saveResult.text());
     }
 
+    const savedRows = await saveResult.json();
+
     return res.status(200).json({
       success: true,
       message: "Notifikasi pembayaran dan top-up diproses",
       order_id,
       payment_status: "paid",
-      topup_status: topupStatus,
-      digiflazz_status: result.status
+      topup_status: savedRows.length
+        ? topupStatus
+        : "Sudah diperbarui webhook",
+      digiflazz_status: digiflazzStatus
     });
 
   } catch (error) {
@@ -300,4 +322,3 @@ module.exports = async (req, res) => {
     });
   }
 };
-      
