@@ -13,16 +13,23 @@ module.exports = async (req, res) => {
   const {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
-    MIDTRANS_SIGNATURE_SECRET
+    MIDTRANS_MODE = "sandbox",
+    MIDTRANS_SERVER_KEY
   } = process.env;
 
   try {
     if (
       !SUPABASE_URL ||
       !SUPABASE_SECRET_KEY ||
-      !MIDTRANS_SIGNATURE_SECRET
+      !MIDTRANS_SERVER_KEY
     ) {
       throw new Error("Environment variable belum lengkap");
+    }
+
+    const mode = MIDTRANS_MODE.toLowerCase();
+
+    if (!["sandbox", "production"].includes(mode)) {
+      throw new Error("MIDTRANS_MODE harus sandbox atau production");
     }
 
     const body = req.body || {};
@@ -49,13 +56,14 @@ module.exports = async (req, res) => {
     }
 
     // VERIFIKASI SIGNATURE MIDTRANS
+    // Menggunakan Server Key sesuai MIDTRANS_MODE.
     const signature = crypto
       .createHash("sha512")
       .update(
         order_id +
         status_code +
         gross_amount +
-        MIDTRANS_SIGNATURE_SECRET
+        MIDTRANS_SERVER_KEY
       )
       .digest("hex");
 
@@ -135,7 +143,6 @@ module.exports = async (req, res) => {
 
     // PEMBAYARAN BELUM BERHASIL
     if (paymentStatus !== "paid") {
-      // Jangan pernah menimpa pembayaran yang sudah paid.
       if (order.payment_status === "paid") {
         return res.status(200).json({
           success: true,
@@ -192,7 +199,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // HANYA KLAIM PESANAN PENDING SATU KALI
+    // KLAIM PESANAN PENDING SATU KALI
     const claimResponse = await fetch(
       `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&payment_status=eq.paid&topup_status=eq.pending&select=order_id,sku,customer_no`,
       {
@@ -231,7 +238,6 @@ module.exports = async (req, res) => {
     } catch (error) {
       console.error("DIGIFLAZZ_SEND_ERROR:", error.message);
 
-      // Jangan kirim ulang otomatis karena hasil bisa ambigu.
       return res.status(200).json({
         success: true,
         message: "Hasil pengiriman belum dapat dipastikan; perlu pemeriksaan",
@@ -294,3 +300,4 @@ module.exports = async (req, res) => {
     });
   }
 };
+      
