@@ -54,7 +54,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Verifikasi Ping Digiflazz
+    // Verifikasi ping Digiflazz
     if (payload.sed && payload.hook_id && payload.hook) {
       if (!safeEqual(payload.hook.secret || "", secret)) {
         return res.status(401).json({
@@ -62,8 +62,6 @@ export default async function handler(req, res) {
           message: "Ping secret tidak valid"
         });
       }
-
-      console.log("DIGIFLAZZ_WEBHOOK_PING:", payload.hook_id);
 
       return res.status(200).json({
         success: true,
@@ -124,10 +122,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // PENTING: retrying juga harus bisa diperbarui
+    // Hanya pesanan yang sudah dibayar dan belum final
     const url =
       `${supabaseUrl.replace(/\/+$/, "")}/rest/v1/orders` +
       `?order_id=eq.${encodeURIComponent(orderId)}` +
+      `&payment_status=eq.paid` +
       `&topup_status=in.(processing,pending,retrying)`;
 
     const response = await fetch(url, {
@@ -161,7 +160,7 @@ export default async function handler(req, res) {
       success: true,
       message: updatedRows.length
         ? "Status top-up berhasil diperbarui"
-        : "Tidak ada baris yang perlu diperbarui",
+        : "Tidak ada pesanan yang perlu diperbarui",
       order_id: orderId,
       topup_status: topupStatus,
       updated_rows: updatedRows.length
