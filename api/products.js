@@ -1,6 +1,7 @@
-
 import crypto from "node:crypto";
 import https from "node:https";
+
+let refreshPromise = null;
 
 async function sendDigiflazzRequest(proxyUrl, payload) {
   const agent = new https.Agent({
@@ -27,8 +28,15 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
           let result = "";
 
           response.setEncoding("utf8");
+
           response.on("data", chunk => {
             result += chunk;
+
+            if (result.length > 5 * 1024 * 1024) {
+              response.destroy(
+                new Error("Respons Digiflazz terlalu besar")
+              );
+            }
           });
 
           response.on("end", () => {
@@ -39,7 +47,7 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
               });
             } catch {
               reject(
-                new Error("Respons Digiflazz bukan JSON yang valid")
+                new Error("Respons Digiflazz bukan JSON valid")
               );
             }
           });
@@ -49,9 +57,7 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
       );
 
       request.setTimeout(30000, () => {
-        request.destroy(
-          new Error("Koneksi proxy Digiflazz timeout")
-        );
+        request.destroy(new Error("Koneksi Digiflazz timeout"));
       });
 
       request.on("error", reject);
@@ -61,6 +67,66 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
   } finally {
     agent.destroy();
   }
+}
+
+async function fetchFreshProducts({
+  username,
+  apiKey,
+  proxyUrl,
+  baseUrl,
+  supabaseKey,
+  cacheKey
+}) {
+  const sign = crypto
+    .createHash("md5")
+    .update(username + apiKey + "pricelist")
+    .digest("hex");
+
+  const response = await sendDigiflazzRequest(proxyUrl, {
+    cmd: "prepaid",
+    username,
+    sign
+  });
+
+  const data = response.data;
+
+  if (
+    response.statusCode < 200 ||
+    response.statusCode >= 300 ||
+    !data ||
+    !Array.isArray(data.data)
+  ) {
+    throw new Error(
+      data?.message || "Data produk Digiflazz tidak valid"
+    );
+  }
+
+  const saveResponse = await fetch(
+    `${baseUrl}/rest/v1/product_cache?on_conflict=cache_key`,
+    {
+      method: "POST",
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal"
+      },
+      body: JSON.stringify({
+        cache_key: cacheKey,
+        response: data,
+        updated_at: new Date().toISOString()
+      })
+    }
+  );
+
+  if (!saveResponse.ok) {
+    console.error(
+      "PRODUCT_CACHE_SAVE_ERROR:",
+      await saveResponse.text()
+    );
+  }
+
+  return data;
 }
 
 export default async function handler(req, res) {
@@ -96,154 +162,113 @@ export default async function handler(req, res) {
     const parsedProxy = new URL(proxyUrl);
 
     if (!["http:", "https:"].includes(parsedProxy.protocol)) {
-      throw new Error();
-    }
-  } catch {
-    return res.status(500).json({
-      success: false,
-      message: "Format URL proxy Digiflazz tidak valid"
-    });
-  }
-
-  const baseUrl = supabaseUrl.replace(/\/+$/, "");
-  const cacheKey = "digiflazz_prepaid";
-  const cacheDuration = 5 * 60 * 1000;
-
-  let cachedProduct = null;
-  let cacheTime = 0;
-
-  // AMBIL CACHE DARI SUPABASE
-  try {
-    const cacheResponse = await fetch(
-      `${baseUrl}/rest/v1/product_cache?cache_key=eq.${cacheKey}&select=response,updated_at&limit=1`,
-      {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`
-        }
-      }
-    );
-
-    if (cacheResponse.ok) {
-      const cacheData = await cacheResponse.json();
-
-      if (
-        Array.isArray(cacheData) &&
-        cacheData.length > 0 &&
-        Array.isArray(cacheData[0].response?.data)
-      ) {
-        cachedProduct = cacheData[0].response;
-        cacheTime = new Date(
-          cacheData[0].updated_at
-        ).getTime();
-      }
-    } else {
-      console.error(
-        "PRODUCT_CACHE_READ_ERROR:",
-        await cacheResponse.text()
-      );
-    }
-  } catch (error) {
-    console.error(
-      "PRODUCT_CACHE_READ_ERROR:",
-      error.message
-    );
-  }
-
-  // CACHE HANYA BERLAKU 5 MENIT
-  const cacheAge = Date.now() - cacheTime;
-
-  const cacheIsFresh =
-    cachedProduct &&
-    Number.isFinite(cacheTime) &&
-    cacheAge >= 0 &&
-    cacheAge < cacheDuration;
-
-  if (cacheIsFresh) {
-    return res.status(200).json(cachedProduct);
-  }
-
-  try {
-    // SIGNATURE DIGIFLAZZ PRODUCTION
-    const sign = crypto
-      .createHash("md5")
-      .update(username + apiKey + "pricelist")
-      .digest("hex");
-
-    // AMBIL PRODUK MELALUI PROXY NODE4
-    const response = await sendDigiflazzRequest(
-      proxyUrl,
-      {
-        cmd: "prepaid",
-        username,
-        sign
-      }
-    );
-
-    const data = response.data;
-
-    if (
-      response.statusCode < 200 ||
-      response.statusCode >= 300 ||
-      !data ||
-      !Array.isArray(data.data)
-    ) {
-      throw new Error(
-        data?.data?.message ||
-        data?.message ||
-        "Data produk Digiflazz tidak valid"
-      );
+      throw new Error("URL proxy tidak valid");
     }
 
-    // SIMPAN CACHE TERBARU KE SUPABASE
+    const baseUrl = supabaseUrl.replace(/\/+$/, "");
+    const cacheKey = "digiflazz_prepaid";
+    const cacheDuration = 5 * 60 * 1000;
+
+    let cachedProduct = null;
+    let cacheTime = 0;
+
+    // BACA CACHE SUPABASE
     try {
-      const saveCacheResponse = await fetch(
-        `${baseUrl}/rest/v1/product_cache?on_conflict=cache_key`,
+      const cacheResponse = await fetch(
+        `${baseUrl}/rest/v1/product_cache?cache_key=eq.${cacheKey}&select=response,updated_at&limit=1`,
         {
-          method: "POST",
           headers: {
             apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-            "Content-Type": "application/json",
-            Prefer: "resolution=merge-duplicates,return=minimal"
-          },
-          body: JSON.stringify({
-            cache_key: cacheKey,
-            response: data,
-            updated_at: new Date().toISOString()
-          })
+            Authorization: `Bearer ${supabaseKey}`
+          }
         }
       );
 
-      if (!saveCacheResponse.ok) {
+      if (cacheResponse.ok) {
+        const cacheData = await cacheResponse.json();
+
+        if (
+          Array.isArray(cacheData) &&
+          cacheData.length > 0 &&
+          Array.isArray(cacheData[0].response?.data)
+        ) {
+          cachedProduct = cacheData[0].response;
+          cacheTime = new Date(
+            cacheData[0].updated_at
+          ).getTime();
+        }
+      } else {
         console.error(
-          "PRODUCT_CACHE_SAVE_ERROR:",
-          await saveCacheResponse.text()
+          "PRODUCT_CACHE_READ_ERROR:",
+          await cacheResponse.text()
         );
       }
     } catch (error) {
       console.error(
-        "PRODUCT_CACHE_SAVE_ERROR:",
+        "PRODUCT_CACHE_READ_ERROR:",
         error.message
       );
     }
 
-    return res.status(200).json(data);
+    // GUNAKAN CACHE SEGAR
+    const cacheAge = Date.now() - cacheTime;
 
-  } catch (error) {
-    console.error(
-      "DIGIFLAZZ_PRODUCTS_ERROR:",
-      error.message
-    );
+    const cacheIsFresh =
+      cachedProduct &&
+      Number.isFinite(cacheTime) &&
+      cacheAge >= 0 &&
+      cacheAge < cacheDuration;
 
-    // HANYA GUNAKAN CACHE LAMA JIKA MASIH SEGAR
     if (cacheIsFresh) {
       return res.status(200).json(cachedProduct);
     }
 
-    return res.status(503).json({
+    // CEGAH PERMINTAAN BERSAMAAN PADA INSTANCE YANG SAMA
+    try {
+      if (!refreshPromise) {
+        refreshPromise = fetchFreshProducts({
+          username,
+          apiKey,
+          proxyUrl,
+          baseUrl,
+          supabaseKey,
+          cacheKey
+        }).finally(() => {
+          refreshPromise = null;
+        });
+      }
+
+      const freshProducts = await refreshPromise;
+
+      return res.status(200).json(freshProducts);
+
+    } catch (error) {
+      console.error(
+        "DIGIFLAZZ_PRODUCTS_ERROR:",
+        error.message
+      );
+
+      // JIKA DIGIFLAZZ GAGAL, TETAP GUNAKAN CACHE LAMA
+      if (cachedProduct) {
+        return res.status(200).json(cachedProduct);
+      }
+
+      return res.status(503).json({
+        success: false,
+        message: "Daftar produk sementara tidak tersedia. Silakan coba lagi."
+      });
+    }
+
+  } catch (error) {
+    console.error(
+      "PRODUCTS_API_ERROR:",
+      error.message
+    );
+
+    return res.status(500).json({
       success: false,
-      message: "Daftar produk sementara tidak tersedia. Silakan coba lagi."
+      message: "Terjadi kesalahan pada server"
     });
   }
 }
+      
