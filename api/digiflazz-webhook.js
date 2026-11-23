@@ -1,4 +1,3 @@
-
 import crypto from "node:crypto";
 
 export const config = {
@@ -55,8 +54,16 @@ export default async function handler(req, res) {
     }
 
     const payload = JSON.parse(rawBody.toString("utf8"));
-    const data = payload.data || {};
 
+    // Terima ping dari Digiflazz saat konfigurasi webhook
+    if (payload.sed && payload.hook) {
+      return res.status(200).json({
+        success: true,
+        message: "Webhook ping diterima"
+      });
+    }
+
+    const data = payload.data || {};
     const orderId = data.ref_id;
     const status = String(data.status || "").toLowerCase();
 
@@ -130,3 +137,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
