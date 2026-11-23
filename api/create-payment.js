@@ -1,4 +1,3 @@
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({
@@ -14,30 +13,50 @@ export default async function handler(req, res) {
     MIDTRANS_SERVER_KEY
   } = process.env;
 
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_SECRET_KEY ||
+    !MIDTRANS_SERVER_KEY
+  ) {
+    return res.status(500).json({
+      success: false,
+      message: "Environment Variables belum lengkap"
+    });
+  }
+
+  const mode = String(MIDTRANS_MODE).toLowerCase();
+
+  if (!["sandbox", "production"].includes(mode)) {
+    return res.status(500).json({
+      success: false,
+      message: "MIDTRANS_MODE harus sandbox atau production"
+    });
+  }
+
+  const {
+    order_id,
+    sku,
+    customer_no
+  } = req.body || {};
+
+  if (
+    typeof order_id !== "string" ||
+    typeof sku !== "string" ||
+    typeof customer_no !== "string" ||
+    !order_id.trim() ||
+    !sku.trim() ||
+    !customer_no.trim()
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Data transaksi belum lengkap"
+    });
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+
   try {
-    if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !MIDTRANS_SERVER_KEY) {
-      throw new Error("Environment Variables belum lengkap");
-    }
-
-    const mode = MIDTRANS_MODE.toLowerCase();
-
-    if (!["sandbox", "production"].includes(mode)) {
-      throw new Error("MIDTRANS_MODE harus sandbox atau production");
-    }
-
-    const {
-      order_id,
-      sku,
-      customer_no
-    } = req.body || {};
-
-    if (!order_id || !sku || !customer_no) {
-      return res.status(400).json({
-        success: false,
-        message: "Data transaksi belum lengkap"
-      });
-    }
-
     const supabaseUrl = SUPABASE_URL.replace(/\/+$/, "");
 
     const headers = {
@@ -46,8 +65,7 @@ export default async function handler(req, res) {
       "Content-Type": "application/json"
     };
 
-    // Login bersifat opsional.
-    // Jika token tersedia, validasi pemilik akun.
+    // LOGIN OPSIONAL
     let user = null;
     const authorization = req.headers.authorization;
 
@@ -60,7 +78,8 @@ export default async function handler(req, res) {
           headers: {
             apikey: SUPABASE_SECRET_KEY,
             Authorization: `Bearer ${token}`
-          }
+          },
+          signal: controller.signal
         }
       );
 
@@ -72,17 +91,22 @@ export default async function handler(req, res) {
       }
 
       user = await authResponse.json();
+
+      if (!user?.id) {
+        return res.status(401).json({
+          success: false,
+          message: "Identitas pengguna tidak valid"
+        });
+      }
     }
 
-    // Cari pesanan berdasarkan order ID.
+    // CARI PESANAN
     const params = new URLSearchParams({
       select: "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status",
       order_id: `eq.${order_id}`,
       limit: "1"
     });
 
-    // Pesanan akun harus cocok dengan pemiliknya.
-    // Pesanan tamu harus memiliki user_id NULL.
     if (user) {
       params.set("user_id", `eq.${user.id}`);
     } else {
@@ -90,8 +114,11 @@ export default async function handler(req, res) {
     }
 
     const orderResponse = await fetch(
-      `${supabaseUrl}/rest/v1/orders?${params.toString()}`,
-      { headers }
+      `${supabaseUrl}/rest/v1/orders?${params}`,
+      {
+        headers,
+        signal: controller.signal
+      }
     );
 
     if (!orderResponse.ok) {
@@ -119,7 +146,7 @@ export default async function handler(req, res) {
     }
 
     if (order.payment_status !== "pending") {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
         message: "Pesanan bukan berstatus pending"
       });
@@ -127,11 +154,17 @@ export default async function handler(req, res) {
 
     const amount = Number(order.selling_price);
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error("Nominal pembayaran tidak valid");
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Nominal pembayaran tidak valid"
+      });
     }
 
-    // URL otomatis mengikuti MIDTRANS_MODE.
+    // MIDTRANS SANDBOX / PRODUCTION
     const midtransUrl =
       mode === "production"
         ? "https://api.midtrans.com/v2/charge"
@@ -152,7 +185,7 @@ export default async function handler(req, res) {
         payment_type: "qris",
         transaction_details: {
           order_id: order.order_id,
-          gross_amount: Math.round(amount)
+          gross_amount: amount
         },
         qris: {
           acquirer: "gopay"
@@ -160,25 +193,31 @@ export default async function handler(req, res) {
         item_details: [
           {
             id: order.sku,
-            price: Math.round(amount),
+            price: amount,
             quantity: 1,
             name: order.product_name || order.sku
           }
         ]
-      })
+      }),
+      signal: controller.signal
     });
 
-    const payment = await midtransResponse.json();
+    let payment;
+
+    try {
+      payment = await midtransResponse.json();
+    } catch {
+      throw new Error("Respons Midtrans tidak valid");
+    }
 
     if (!midtransResponse.ok) {
-      console.error("Midtrans error:", payment);
+      console.error("MIDTRANS_CREATE_ERROR:", payment);
 
       return res.status(400).json({
         success: false,
         message:
           payment.status_message ||
-          "Gagal membuat pembayaran QRIS",
-        midtrans: payment
+          "Gagal membuat pembayaran QRIS"
       });
     }
 
@@ -191,11 +230,27 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error("Create payment error:", error);
+    console.error(
+      "CREATE_PAYMENT_ERROR:",
+      error.message
+    );
+
+    if (error.name === "AbortError") {
+      return res.status(504).json({
+        success: false,
+        uncertain: true,
+        message: "Respons server timeout. Status pembayaran perlu diperiksa sebelum mencoba kembali.",
+        order_id
+      });
+    }
 
     return res.status(500).json({
       success: false,
-      message: error.message || "Terjadi kesalahan server"
+      message: "Terjadi kesalahan saat membuat pembayaran"
     });
+
+  } finally {
+    clearTimeout(timer);
   }
 }
+
