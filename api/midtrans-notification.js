@@ -38,7 +38,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Verifikasi signature Midtrans
+    // VERIFIKASI SIGNATURE MIDTRANS
     const signature = crypto
       .createHash("sha512")
       .update(
@@ -69,7 +69,7 @@ module.exports = async (req, res) => {
 
     const baseUrl = `${SUPABASE_URL}/rest/v1/orders`;
 
-    // Ambil pesanan
+    // AMBIL PESANAN
     const findResponse = await fetch(
       `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&select=order_id,sku,customer_no,selling_price,payment_status,topup_status`,
       { headers }
@@ -91,6 +91,7 @@ module.exports = async (req, res) => {
       });
     }
 
+    // TENTUKAN STATUS PEMBAYARAN
     let paymentStatus = "pending";
 
     if (
@@ -110,7 +111,7 @@ module.exports = async (req, res) => {
       paymentStatus = "failed";
     }
 
-    // Simpan status pembayaran
+    // SIMPAN STATUS PEMBAYARAN
     const paymentUpdate = await fetch(
       `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}`,
       {
@@ -129,7 +130,7 @@ module.exports = async (req, res) => {
       throw new Error(await paymentUpdate.text());
     }
 
-    // Jangan kirim top-up jika pembayaran belum berhasil
+    // JANGAN KIRIM TOP-UP JIKA BELUM DIBAYAR
     if (paymentStatus !== "paid") {
       return res.status(200).json({
         message: "Status pembayaran diperbarui",
@@ -138,7 +139,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Kunci pesanan secara atomik agar tidak terkirim dua kali
+    // KUNCI PESANAN SECARA ATOMIK
     const claimResponse = await fetch(
       `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}&payment_status=eq.paid&topup_status=eq.pending&select=order_id,sku,customer_no`,
       {
@@ -159,7 +160,7 @@ module.exports = async (req, res) => {
       throw new Error(JSON.stringify(claimedOrders));
     }
 
-    // Jika sudah pernah diproses, jangan kirim ulang
+    // CEGAH PENGIRIMAN GANDA
     if (!claimedOrders.length) {
       return res.status(200).json({
         message: "Pesanan sudah diproses atau sedang diproses",
@@ -168,15 +169,14 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Kirim transaksi ke Digiflazz Development
+    // KIRIM KE DIGIFLAZZ PRODUCTION
     let result;
 
     try {
       result = await sendDigiflazz(claimedOrders[0]);
     } catch (error) {
-      console.error("Digiflazz error:", error);
+      console.error("Digiflazz Production error:", error);
 
-      // Tetap processing untuk mencegah pengiriman ganda
       return res.status(200).json({
         message: "Pengiriman belum dapat dipastikan. Perlu pengecekan manual.",
         order_id,
@@ -195,7 +195,7 @@ module.exports = async (req, res) => {
       topupStatus = "failed";
     }
 
-    // Simpan hasil transaksi
+    // SIMPAN HASIL TOP-UP
     const saveResult = await fetch(
       `${baseUrl}?order_id=eq.${encodeURIComponent(order_id)}`,
       {
@@ -215,7 +215,7 @@ module.exports = async (req, res) => {
     }
 
     return res.status(200).json({
-      message: "Transaksi Digiflazz diproses",
+      message: "Transaksi Digiflazz Production diproses",
       order_id,
       payment_status: "paid",
       topup_status: topupStatus,
@@ -230,4 +230,3 @@ module.exports = async (req, res) => {
     });
   }
 };
-      
