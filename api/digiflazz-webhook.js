@@ -1,3 +1,4 @@
+
 import crypto from "node:crypto";
 
 export const config = {
@@ -5,6 +6,16 @@ export const config = {
     bodyParser: false
   }
 };
+
+function safeEqual(a, b) {
+  const first = Buffer.from(String(a));
+  const second = Buffer.from(String(b));
+
+  return (
+    first.length === second.length &&
+    crypto.timingSafeEqual(first, second)
+  );
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -22,6 +33,18 @@ export default async function handler(req, res) {
     }
 
     const rawBody = Buffer.concat(chunks);
+
+    let payload;
+
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      return res.status(400).json({
+        success: false,
+        message: "JSON tidak valid"
+      });
+    }
+
     const secret = process.env.DIGIFLAZZ_WEBHOOK_SECRET;
 
     if (!secret) {
@@ -31,6 +54,24 @@ export default async function handler(req, res) {
       });
     }
 
+    // Verifikasi Ping Digiflazz
+    if (payload.sed && payload.hook_id && payload.hook) {
+      if (!safeEqual(payload.hook.secret || "", secret)) {
+        return res.status(401).json({
+          success: false,
+          message: "Ping secret tidak valid"
+        });
+      }
+
+      console.log("DIGIFLAZZ_WEBHOOK_PING:", payload.hook_id);
+
+      return res.status(200).json({
+        success: true,
+        message: "Webhook ping diterima"
+      });
+    }
+
+    // Verifikasi tanda tangan event transaksi
     const signature = req.headers["x-hub-signature"] || "";
 
     const expected =
@@ -40,26 +81,10 @@ export default async function handler(req, res) {
         .update(rawBody)
         .digest("hex");
 
-    const receivedBuffer = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expected);
-
-    if (
-      receivedBuffer.length !== expectedBuffer.length ||
-      !crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
-    ) {
+    if (!safeEqual(signature, expected)) {
       return res.status(401).json({
         success: false,
         message: "Signature tidak valid"
-      });
-    }
-
-    const payload = JSON.parse(rawBody.toString("utf8"));
-
-    // Terima ping dari Digiflazz saat konfigurasi webhook
-    if (payload.sed && payload.hook) {
-      return res.status(200).json({
-        success: true,
-        message: "Webhook ping diterima"
       });
     }
 
@@ -85,7 +110,7 @@ export default async function handler(req, res) {
     if (!topupStatus) {
       return res.status(200).json({
         success: true,
-        message: "Status belum final"
+        message: "Status transaksi belum final"
       });
     }
 
@@ -137,4 +162,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
