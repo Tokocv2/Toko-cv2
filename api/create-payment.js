@@ -1,3 +1,4 @@
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({
@@ -53,24 +54,67 @@ export default async function handler(req, res) {
     });
   }
 
+  const cleanOrderId = order_id.trim();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
 
-  try {
-    const supabaseUrl = SUPABASE_URL.replace(/\/+$/, "");
+  let lockClaimed = false;
+  let supabaseUrl;
 
-    const headers = {
-      apikey: SUPABASE_SECRET_KEY,
-      Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
-      "Content-Type": "application/json"
-    };
+  const headers = {
+    apikey: SUPABASE_SECRET_KEY,
+    Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+    "Content-Type": "application/json"
+  };
+
+  // MELEPASKAN KUNCI HANYA JIKA MIDTRANS MENOLAK PERMINTAAN
+  async function releaseLock() {
+    const response = await fetch(
+      `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating`,
+      {
+        method: "PATCH",
+        headers: {
+          ...headers,
+          Prefer: "return=minimal"
+        },
+        body: JSON.stringify({
+          payment_creation_status: "idle",
+          payment_lock_at: null
+        }),
+        signal: controller.signal
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Gagal melepaskan pengunci pembayaran");
+    }
+
+    lockClaimed = false;
+  }
+
+  try {
+    supabaseUrl = SUPABASE_URL.replace(/\/+$/, "");
 
     // LOGIN OPSIONAL
     let user = null;
     const authorization = req.headers.authorization;
 
-    if (authorization?.startsWith("Bearer ")) {
-      const token = authorization.slice(7);
+    if (authorization) {
+      if (!authorization.startsWith("Bearer ")) {
+        return res.status(401).json({
+          success: false,
+          message: "Format token login tidak valid"
+        });
+      }
+
+      const token = authorization.slice(7).trim();
+
+      if (!token) {
+        return res.status(401).json({
+          success: false,
+          message: "Token login kosong"
+        });
+      }
 
       const authResponse = await fetch(
         `${supabaseUrl}/auth/v1/user`,
@@ -102,8 +146,8 @@ export default async function handler(req, res) {
 
     // CARI PESANAN
     const params = new URLSearchParams({
-      select: "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status",
-      order_id: `eq.${order_id}`,
+      select: "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status,payment_creation_status,payment_url",
+      order_id: `eq.${cleanOrderId}`,
       limit: "1"
     });
 
@@ -136,8 +180,8 @@ export default async function handler(req, res) {
     }
 
     if (
-      order.sku !== sku ||
-      order.customer_no !== customer_no
+      order.sku !== sku.trim() ||
+      order.customer_no !== customer_no.trim()
     ) {
       return res.status(400).json({
         success: false,
@@ -152,6 +196,25 @@ export default async function handler(req, res) {
       });
     }
 
+    // CEK STATUS PENGUNCI
+    if (
+      order.payment_creation_status === "creating" ||
+      order.payment_creation_status === "created"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "Pembayaran untuk pesanan ini sudah diproses. Jangan membuat tagihan baru.",
+        order_id: cleanOrderId
+      });
+    }
+
+    if (order.payment_creation_status !== "idle") {
+      return res.status(409).json({
+        success: false,
+        message: "Status penguncian pembayaran tidak dikenal. Perlu pemeriksaan."
+      });
+    }
+
     const amount = Number(order.selling_price);
 
     if (
@@ -163,6 +226,40 @@ export default async function handler(req, res) {
         message: "Nominal pembayaran tidak valid"
       });
     }
+
+    // AMBIL KUNCI ATOMIK DI SUPABASE
+    const lockResponse = await fetch(
+      `${supabaseUrl}/rest/v1/rpc/claim_order_payment_lock`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          p_order_id: cleanOrderId
+        }),
+        signal: controller.signal
+      }
+    );
+
+    if (!lockResponse.ok) {
+      console.error(
+        "PAYMENT_LOCK_ERROR:",
+        await lockResponse.text()
+      );
+
+      throw new Error("Gagal mengunci pesanan di Supabase");
+    }
+
+    const lockResult = await lockResponse.json();
+
+    if (lockResult !== true) {
+      return res.status(409).json({
+        success: false,
+        message: "Pesanan sedang diproses atau sudah memiliki permintaan pembayaran.",
+        order_id: cleanOrderId
+      });
+    }
+
+    lockClaimed = true;
 
     // MIDTRANS SANDBOX / PRODUCTION
     const midtransUrl =
@@ -207,25 +304,70 @@ export default async function handler(req, res) {
     try {
       payment = await midtransResponse.json();
     } catch {
-      throw new Error("Respons Midtrans tidak valid");
+      // Respons tidak bisa dibaca: jangan lepaskan kunci.
+      throw new Error("Respons Midtrans tidak dapat dibaca");
     }
 
     if (!midtransResponse.ok) {
       console.error("MIDTRANS_CREATE_ERROR:", payment);
 
+      // Midtrans memberikan penolakan HTTP yang jelas.
+      await releaseLock();
+
       return res.status(400).json({
         success: false,
         message:
           payment.status_message ||
-          "Gagal membuat pembayaran QRIS"
+          "Midtrans menolak pembuatan pembayaran QRIS"
       });
     }
+
+    // SIMPAN STATUS PEMBAYARAN YANG BERHASIL DIBUAT
+    const qrAction = Array.isArray(payment.actions)
+      ? payment.actions.find(
+          action => action.name === "generate-qr-code"
+        )
+      : null;
+
+    const updateResponse = await fetch(
+      `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating`,
+      {
+        method: "PATCH",
+        headers: {
+          ...headers,
+          Prefer: "return=minimal"
+        },
+        body: JSON.stringify({
+          payment_creation_status: "created",
+          payment_url: qrAction?.url || null
+        }),
+        signal: controller.signal
+      }
+    );
+
+    if (!updateResponse.ok) {
+      // Jangan lepaskan kunci karena Midtrans sudah membuat pembayaran.
+      console.error(
+        "PAYMENT_STATUS_SAVE_ERROR:",
+        await updateResponse.text()
+      );
+
+      return res.status(200).json({
+        success: true,
+        mode,
+        warning: "Pembayaran sudah dibuat Midtrans, tetapi penyimpanan status internal perlu diperiksa.",
+        order_id: cleanOrderId,
+        payment
+      });
+    }
+
+    lockClaimed = false;
 
     return res.status(200).json({
       success: true,
       mode,
       message: "Pembayaran QRIS berhasil dibuat",
-      order_id: order.order_id,
+      order_id: cleanOrderId,
       payment
     });
 
@@ -235,22 +377,25 @@ export default async function handler(req, res) {
       error.message
     );
 
-    if (error.name === "AbortError") {
+    if (error.name === "AbortError" || error.name === "TimeoutError") {
       return res.status(504).json({
         success: false,
         uncertain: true,
-        message: "Respons server timeout. Status pembayaran perlu diperiksa sebelum mencoba kembali.",
-        order_id
+        message: "Respons timeout. Jangan membuat pembayaran baru sebelum status Midtrans diperiksa.",
+        order_id: cleanOrderId
       });
     }
 
     return res.status(500).json({
       success: false,
-      message: "Terjadi kesalahan saat membuat pembayaran"
+      uncertain: lockClaimed,
+      message: lockClaimed
+        ? "Proses pembayaran belum dapat dipastikan. Pengunci dipertahankan demi mencegah tagihan ganda."
+        : "Terjadi kesalahan saat membuat pembayaran",
+      order_id: cleanOrderId
     });
 
   } finally {
     clearTimeout(timer);
   }
 }
-
