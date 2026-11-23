@@ -7,103 +7,95 @@ export default async function handler(req, res) {
     });
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SECRET_KEY;
-  const serverKey = process.env.MIDTRANS_SERVER_KEY;
-
-  if (!supabaseUrl || !supabaseKey || !serverKey) {
-    return res.status(500).json({
-      success: false,
-      message: "Konfigurasi Supabase atau Midtrans belum lengkap"
-    });
-  }
-
-  const token = (req.headers.authorization || "")
-    .replace(/^Bearer\s+/i, "")
-    .trim();
-
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: "Silakan login terlebih dahulu"
-    });
-  }
-
-  const { order_id, sku, customer_no } = req.body || {};
-
-  const validCustomerNo =
-    typeof customer_no === "string" &&
-    /^(?:[0-9]{5,30})(?:\|[0-9]{1,20})?$/.test(customer_no);
-
-  if (
-    typeof order_id !== "string" ||
-    !/^TCV2-[0-9a-f-]{36}$/i.test(order_id) ||
-    typeof sku !== "string" ||
-    !/^[a-zA-Z0-9_-]{1,100}$/.test(sku) ||
-    !validCustomerNo
-  ) {
-    return res.status(400).json({
-      success: false,
-      message: "Data pesanan tidak valid"
-    });
-  }
+  const {
+    SUPABASE_URL,
+    SUPABASE_SECRET_KEY,
+    MIDTRANS_MODE = "sandbox",
+    MIDTRANS_SERVER_KEY
+  } = process.env;
 
   try {
-    const baseUrl = supabaseUrl.replace(/\/+$/, "");
+    if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !MIDTRANS_SERVER_KEY) {
+      throw new Error("Environment Variables belum lengkap");
+    }
 
-    // 1. VERIFIKASI LOGIN PEMBELI
-    const userResponse = await fetch(
-      `${baseUrl}/auth/v1/user`,
-      {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${token}`
+    const mode = MIDTRANS_MODE.toLowerCase();
+
+    if (!["sandbox", "production"].includes(mode)) {
+      throw new Error("MIDTRANS_MODE harus sandbox atau production");
+    }
+
+    const {
+      order_id,
+      sku,
+      customer_no
+    } = req.body || {};
+
+    if (!order_id || !sku || !customer_no) {
+      return res.status(400).json({
+        success: false,
+        message: "Data transaksi belum lengkap"
+      });
+    }
+
+    const supabaseUrl = SUPABASE_URL.replace(/\/+$/, "");
+
+    const headers = {
+      apikey: SUPABASE_SECRET_KEY,
+      Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+      "Content-Type": "application/json"
+    };
+
+    // Login bersifat opsional.
+    // Jika token tersedia, validasi pemilik akun.
+    let user = null;
+    const authorization = req.headers.authorization;
+
+    if (authorization?.startsWith("Bearer ")) {
+      const token = authorization.slice(7);
+
+      const authResponse = await fetch(
+        `${supabaseUrl}/auth/v1/user`,
+        {
+          headers: {
+            apikey: SUPABASE_SECRET_KEY,
+            Authorization: `Bearer ${token}`
+          }
         }
+      );
+
+      if (!authResponse.ok) {
+        return res.status(401).json({
+          success: false,
+          message: "Token login tidak valid"
+        });
       }
-    );
 
-    if (!userResponse.ok) {
-      return res.status(401).json({
-        success: false,
-        message: "Sesi login tidak valid"
-      });
+      user = await authResponse.json();
     }
 
-    const user = await userResponse.json();
-
-    if (!user.id) {
-      return res.status(401).json({
-        success: false,
-        message: "Pengguna tidak ditemukan"
-      });
-    }
-
-    // 2. AMBIL ORDER MILIK PENGGUNA DARI SUPABASE
-    const query = new URLSearchParams({
+    // Cari pesanan berdasarkan order ID.
+    const params = new URLSearchParams({
       select: "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status",
       order_id: `eq.${order_id}`,
-      user_id: `eq.${user.id}`,
       limit: "1"
     });
 
+    // Pesanan akun harus cocok dengan pemiliknya.
+    // Pesanan tamu harus memiliki user_id NULL.
+    if (user) {
+      params.set("user_id", `eq.${user.id}`);
+    } else {
+      params.set("user_id", "is.null");
+    }
+
     const orderResponse = await fetch(
-      `${baseUrl}/rest/v1/orders?${query.toString()}`,
-      {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-          Accept: "application/json"
-        }
-      }
+      `${supabaseUrl}/rest/v1/orders?${params.toString()}`,
+      { headers }
     );
 
     if (!orderResponse.ok) {
-      console.error("Supabase order error:", await orderResponse.text());
-
-      return res.status(502).json({
-        success: false,
-        message: "Gagal memeriksa pesanan"
-      });
+      throw new Error("Gagal mengambil data pesanan");
     }
 
     const orders = await orderResponse.json();
@@ -116,7 +108,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. COCOKKAN DATA PESANAN
     if (
       order.sku !== sku ||
       order.customer_no !== customer_no
@@ -128,82 +119,75 @@ export default async function handler(req, res) {
     }
 
     if (order.payment_status !== "pending") {
-      return res.status(409).json({
-        success: false,
-        message: "Pesanan sudah dibayar atau tidak dapat dibayar"
-      });
-    }
-
-    // 4. AMBIL HARGA JUAL ASLI DARI SUPABASE
-    const hargaJual = Number(order.selling_price);
-
-    if (
-      !Number.isSafeInteger(hargaJual) ||
-      hargaJual <= 0
-    ) {
       return res.status(400).json({
         success: false,
-        message: "Nominal pesanan tidak valid"
+        message: "Pesanan bukan berstatus pending"
       });
     }
 
-    // 5. BUAT TAGIHAN MIDTRANS SANDBOX
-    const auth = Buffer
-      .from(serverKey + ":")
-      .toString("base64");
+    const amount = Number(order.selling_price);
 
-    const midtransResponse = await fetch(
-      "https://api.sandbox.midtrans.com/v2/charge",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          Authorization: `Basic ${auth}`
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Nominal pembayaran tidak valid");
+    }
+
+    // URL otomatis mengikuti MIDTRANS_MODE.
+    const midtransUrl =
+      mode === "production"
+        ? "https://api.midtrans.com/v2/charge"
+        : "https://api.sandbox.midtrans.com/v2/charge";
+
+    const auth = Buffer.from(
+      `${MIDTRANS_SERVER_KEY}:`
+    ).toString("base64");
+
+    const midtransResponse = await fetch(midtransUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({
+        payment_type: "qris",
+        transaction_details: {
+          order_id: order.order_id,
+          gross_amount: Math.round(amount)
         },
-        body: JSON.stringify({
-          payment_type: "qris",
-          transaction_details: {
-            order_id: order.order_id,
-            gross_amount: hargaJual
-          },
-          item_details: [
-            {
-              id: order.sku,
-              price: hargaJual,
-              quantity: 1,
-              name: String(
-                order.product_name || order.sku
-              ).slice(0, 50)
-            }
-          ],
-          custom_field1: order.customer_no
-        })
-      }
-    );
+        qris: {
+          acquirer: "gopay"
+        },
+        item_details: [
+          {
+            id: order.sku,
+            price: Math.round(amount),
+            quantity: 1,
+            name: order.product_name || order.sku
+          }
+        ]
+      })
+    });
 
     const payment = await midtransResponse.json();
 
     if (!midtransResponse.ok) {
       console.error("Midtrans error:", payment);
 
-      return res.status(502).json({
+      return res.status(400).json({
         success: false,
-        message: "Gagal membuat tagihan Midtrans",
-        detail:
+        message:
           payment.status_message ||
-          payment.message ||
-          "Kesalahan pembayaran"
+          "Gagal membuat pembayaran QRIS",
+        midtrans: payment
       });
     }
 
-    // 6. KEMBALIKAN INFORMASI PEMBAYARAN
     return res.status(200).json({
       success: true,
+      mode,
+      message: "Pembayaran QRIS berhasil dibuat",
       order_id: order.order_id,
-      product_name: order.product_name,
-      amount: hargaJual,
-      payment: payment
+      payment
     });
 
   } catch (error) {
@@ -211,8 +195,7 @@ export default async function handler(req, res) {
 
     return res.status(500).json({
       success: false,
-      message: "Terjadi kesalahan saat membuat pembayaran"
+      message: error.message || "Terjadi kesalahan server"
     });
   }
-         }
-        
+}
