@@ -25,7 +25,8 @@ export default async function handler(req, res) {
     });
   }
 
-  const mode = String(MIDTRANS_MODE).toLowerCase();
+  const mode = String(MIDTRANS_MODE).trim().toLowerCase();
+  const midtransServerKey = String(MIDTRANS_SERVER_KEY).trim();
 
   if (!["sandbox", "production"].includes(mode)) {
     return res.status(500).json({
@@ -33,6 +34,40 @@ export default async function handler(req, res) {
       message: "MIDTRANS_MODE harus sandbox atau production"
     });
   }
+
+  // VALIDASI FORMAT SERVER KEY
+  if (
+    mode === "sandbox" &&
+    !midtransServerKey.startsWith("SB-Mid-server-")
+  ) {
+    console.error("MIDTRANS_CONFIG_ERROR: Format Sandbox Server Key tidak sesuai");
+
+    return res.status(500).json({
+      success: false,
+      message: "Server Key tidak sesuai dengan mode Sandbox"
+    });
+  }
+
+  if (
+    mode === "production" &&
+    !midtransServerKey.startsWith("Mid-server-")
+  ) {
+    console.error("MIDTRANS_CONFIG_ERROR: Format Production Server Key tidak sesuai");
+
+    return res.status(500).json({
+      success: false,
+      message: "Server Key tidak sesuai dengan mode Production"
+    });
+  }
+
+  console.log("MIDTRANS_CONFIG_CHECK:", {
+    mode,
+    keyPresent: Boolean(midtransServerKey),
+    keyFormatValid: mode === "sandbox"
+      ? midtransServerKey.startsWith("SB-Mid-server-")
+      : midtransServerKey.startsWith("Mid-server-"),
+    keyLength: midtransServerKey.length
+  });
 
   const {
     order_id,
@@ -67,7 +102,6 @@ export default async function handler(req, res) {
     "Content-Type": "application/json"
   };
 
-  // MELEPASKAN KUNCI HANYA JIKA MIDTRANS MENOLAK PERMINTAAN
   async function releaseLock() {
     const response = await fetch(
       `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating`,
@@ -196,7 +230,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // CEK STATUS PENGUNCI
+    // CEK PENGUNCI PEMBAYARAN
     if (
       order.payment_creation_status === "creating" ||
       order.payment_creation_status === "created"
@@ -227,7 +261,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // AMBIL KUNCI ATOMIK DI SUPABASE
+    // KUNCI ATOMIK SUPABASE
     const lockResponse = await fetch(
       `${supabaseUrl}/rest/v1/rpc/claim_order_payment_lock`,
       {
@@ -261,14 +295,14 @@ export default async function handler(req, res) {
 
     lockClaimed = true;
 
-    // MIDTRANS SANDBOX / PRODUCTION
+    // MIDTRANS API
     const midtransUrl =
       mode === "production"
         ? "https://api.midtrans.com/v2/charge"
         : "https://api.sandbox.midtrans.com/v2/charge";
 
     const auth = Buffer.from(
-      `${MIDTRANS_SERVER_KEY}:`
+      `${midtransServerKey}:`
     ).toString("base64");
 
     const midtransResponse = await fetch(midtransUrl, {
@@ -304,31 +338,35 @@ export default async function handler(req, res) {
     try {
       payment = await midtransResponse.json();
     } catch {
-      // Respons tidak bisa dibaca: jangan lepaskan kunci.
       throw new Error("Respons Midtrans tidak dapat dibaca");
     }
 
+    // JIKA MIDTRANS MENOLAK
     if (!midtransResponse.ok) {
-      console.error("MIDTRANS_CREATE_ERROR:", payment);
+      console.error("MIDTRANS_CREATE_ERROR:", {
+        httpStatus: midtransResponse.status,
+        response: payment
+      });
 
-      // Midtrans memberikan penolakan HTTP yang jelas.
       await releaseLock();
 
       return res.status(400).json({
         success: false,
         message:
           payment.status_message ||
+          payment.error ||
           "Midtrans menolak pembuatan pembayaran QRIS"
       });
     }
 
-    // SIMPAN STATUS PEMBAYARAN YANG BERHASIL DIBUAT
+    // AMBIL LINK QRIS
     const qrAction = Array.isArray(payment.actions)
       ? payment.actions.find(
           action => action.name === "generate-qr-code"
         )
       : null;
 
+    // SIMPAN STATUS PEMBAYARAN
     const updateResponse = await fetch(
       `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating`,
       {
@@ -346,7 +384,6 @@ export default async function handler(req, res) {
     );
 
     if (!updateResponse.ok) {
-      // Jangan lepaskan kunci karena Midtrans sudah membuat pembayaran.
       console.error(
         "PAYMENT_STATUS_SAVE_ERROR:",
         await updateResponse.text()
@@ -377,7 +414,10 @@ export default async function handler(req, res) {
       error.message
     );
 
-    if (error.name === "AbortError" || error.name === "TimeoutError") {
+    if (
+      error.name === "AbortError" ||
+      error.name === "TimeoutError"
+    ) {
       return res.status(504).json({
         success: false,
         uncertain: true,
