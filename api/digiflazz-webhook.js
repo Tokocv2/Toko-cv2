@@ -71,7 +71,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Verifikasi tanda tangan event transaksi
+    // Verifikasi signature transaksi
     const signature = req.headers["x-hub-signature"] || "";
 
     const expected =
@@ -124,10 +124,11 @@ export default async function handler(req, res) {
       });
     }
 
+    // PENTING: retrying juga harus bisa diperbarui
     const url =
       `${supabaseUrl.replace(/\/+$/, "")}/rest/v1/orders` +
       `?order_id=eq.${encodeURIComponent(orderId)}` +
-      `&topup_status=in.(processing,pending)`;
+      `&topup_status=in.(processing,pending,retrying)`;
 
     const response = await fetch(url, {
       method: "PATCH",
@@ -142,15 +143,28 @@ export default async function handler(req, res) {
       })
     });
 
+    const result = await response.text();
+
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(result);
     }
+
+    const updatedRows = result ? JSON.parse(result) : [];
+
+    console.log("DIGIFLAZZ_WEBHOOK_UPDATE:", {
+      orderId,
+      topupStatus,
+      updatedRows: updatedRows.length
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Status top-up berhasil diperbarui",
+      message: updatedRows.length
+        ? "Status top-up berhasil diperbarui"
+        : "Tidak ada baris yang perlu diperbarui",
       order_id: orderId,
-      topup_status: topupStatus
+      topup_status: topupStatus,
+      updated_rows: updatedRows.length
     });
 
   } catch (error) {
