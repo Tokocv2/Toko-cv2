@@ -1,30 +1,21 @@
 
+const crypto = require("node:crypto");
+
 export default async function handler(req, res) {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SECRET_KEY;
-
-  const midtransServerKey = (
-    process.env.MIDTRANS_SERVER_KEY || ""
-  ).trim();
-
-  const PRODUCTS_URL =
-    "https://toko-cv2.vercel.app/api/products";
-
-  const MIDTRANS_URL =
-    "https://app.sandbox.midtrans.com/snap/v1/transactions";
-
-  if (!supabaseUrl || !supabaseKey) {
-    return res.status(500).json({
-      success: false,
-      message: "Konfigurasi Supabase belum lengkap"
-    });
-  }
-
-  const baseUrl = supabaseUrl.replace(/\/+$/, "");
-
-  // TES KONEKSI SUPABASE
   if (req.method === "GET") {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SECRET_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(500).json({
+        success: false,
+        message: "Konfigurasi Supabase belum lengkap"
+      });
+    }
+
     try {
+      const baseUrl = supabaseUrl.replace(/\/+$/, "");
+
       const response = await fetch(
         `${baseUrl}/rest/v1/orders?select=order_id&limit=0`,
         {
@@ -63,63 +54,20 @@ export default async function handler(req, res) {
     });
   }
 
-  let currentStep = "memulai pesanan";
-  let orderId = null;
-  let orderSaved = false;
-  let snapCreated = false;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SECRET_KEY;
 
-  // Mengubah status pembayaran jika tagihan gagal dibuat
-  async function markPaymentFailed() {
-    if (!orderId || !orderSaved || snapCreated) {
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `${baseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(orderId)}&payment_status=eq.pending`,
-        {
-          method: "PATCH",
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-            "Content-Type": "application/json",
-            Prefer: "return=representation"
-          },
-          body: JSON.stringify({
-            payment_status: "failed"
-          })
-        }
-      );
-
-      const result = await response.text();
-
-      if (!response.ok) {
-        throw new Error(result);
-      }
-
-      console.log("PAYMENT_FAILED_UPDATE:", {
-        orderId,
-        updatedRows: result ? JSON.parse(result).length : 0
-      });
-    } catch (error) {
-      console.error("PAYMENT_FAILED_UPDATE_ERROR:", {
-        orderId,
-        message: error.message
-      });
-    }
+  if (!supabaseUrl || !supabaseKey) {
+    return res.status(500).json({
+      success: false,
+      message: "Konfigurasi Supabase belum lengkap"
+    });
   }
 
+  const baseUrl = supabaseUrl.replace(/\/+$/, "");
+
   try {
-    if (!midtransServerKey) {
-      return res.status(500).json({
-        success: false,
-        message: "MIDTRANS_SERVER_KEY belum tersedia"
-      });
-    }
-
     // LOGIN OPSIONAL
-    currentStep = "memeriksa login";
-
     let user = null;
     const authHeader = req.headers.authorization;
 
@@ -158,11 +106,16 @@ export default async function handler(req, res) {
       }
 
       user = await userResponse.json();
+
+      if (!user.id) {
+        return res.status(401).json({
+          success: false,
+          message: "Pengguna tidak ditemukan"
+        });
+      }
     }
 
     // VALIDASI PESANAN
-    currentStep = "memvalidasi data pesanan";
-
     const {
       sku,
       player_id,
@@ -174,7 +127,7 @@ export default async function handler(req, res) {
       typeof sku !== "string" ||
       !sku.trim() ||
       typeof player_id !== "string" ||
-      !player_id.trim() ||
+      !/^[0-9]{5,30}$/.test(player_id.trim()) ||
       typeof game !== "string" ||
       !game.trim() ||
       (
@@ -189,12 +142,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // MENGAMBIL PRODUK
-    currentStep = "mengambil daftar produk";
-
-    const productsResponse = await fetch(PRODUCTS_URL, {
-      cache: "no-store"
-    });
+    // AMBIL DAFTAR PRODUK
+    const productsResponse = await fetch(
+      "https://toko-cv2.vercel.app/api/products",
+      { cache: "no-store" }
+    );
 
     const productsText = await productsResponse.text();
 
@@ -224,9 +176,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // MENCARI SKU
-    currentStep = "mencari produk";
-
+    // CARI SKU
     const product = productsResult.data.find(
       p => p.buyer_sku_code === sku.trim()
     );
@@ -238,12 +188,10 @@ export default async function handler(req, res) {
       });
     }
 
-    // MENGHITUNG HARGA
-    currentStep = "menghitung harga";
-
+    // HITUNG HARGA JUAL 13%
     const modal = Number(product.price);
 
-    if (!Number.isFinite(modal) || modal <= 0) {
+    if (!Number.isSafeInteger(modal) || modal <= 0) {
       return res.status(400).json({
         success: false,
         message: "Harga modal tidak valid"
@@ -253,11 +201,8 @@ export default async function handler(req, res) {
     const hargaJual = Math.round(modal * 1.13);
     const untung = hargaJual - modal;
 
-    // MEMBUAT ID PESANAN
-    currentStep = "membuat ID pesanan";
-
-    const crypto = await import("node:crypto");
-    orderId = "TCV2-" + crypto.randomUUID();
+    // BUAT ID PESANAN
+    const orderId = "TCV2-" + crypto.randomUUID();
 
     const playerId = player_id.trim();
     const playerServer = (player_server || "").trim();
@@ -266,9 +211,7 @@ export default async function handler(req, res) {
       ? `${playerId}|${playerServer}`
       : playerId;
 
-    // MENYIMPAN PESANAN KE SUPABASE
-    currentStep = "menyimpan pesanan ke Supabase";
-
+    // SIMPAN PESANAN KE SUPABASE
     const saveResponse = await fetch(
       `${baseUrl}/rest/v1/orders`,
       {
@@ -287,7 +230,7 @@ export default async function handler(req, res) {
           player_server: playerServer || null,
           sku: product.buyer_sku_code,
           product_name: product.product_name,
-          modal: modal,
+          modal,
           selling_price: hargaJual,
           profit: untung,
           payment_status: "pending",
@@ -299,156 +242,36 @@ export default async function handler(req, res) {
     const saveText = await saveResponse.text();
 
     if (!saveResponse.ok) {
+      console.error("SUPABASE_SAVE_ORDER_ERROR:", saveText);
+
       return res.status(500).json({
         success: false,
-        message: "Gagal menyimpan pesanan",
-        detail: saveText
+        message: "Gagal menyimpan pesanan"
       });
     }
 
-    orderSaved = true;
-
-    // MEMBUAT TAGIHAN MIDTRANS SANDBOX
-    currentStep = "membuat tagihan Midtrans";
-
-    const authorization = Buffer
-      .from(`${midtransServerKey}:`)
-      .toString("base64");
-
-    const snapResponse = await fetch(MIDTRANS_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Authorization: `Basic ${authorization}`
-      },
-      body: JSON.stringify({
-        transaction_details: {
-          order_id: orderId,
-          gross_amount: hargaJual
-        },
-        item_details: [
-          {
-            id: String(product.buyer_sku_code).slice(0, 50),
-            price: hargaJual,
-            quantity: 1,
-            name: String(
-              product.product_name || game
-            ).slice(0, 50)
-          }
-        ]
-      })
-    });
-
-    const snapText = await snapResponse.text();
-
-    let snapData;
-
-    try {
-      snapData = JSON.parse(snapText);
-    } catch {
-      snapData = {
-        message: snapText
-      };
-    }
-
-    if (
-      !snapResponse.ok ||
-      !snapData.token ||
-      !snapData.redirect_url
-    ) {
-      console.error("MIDTRANS_ERROR:", {
-        status: snapResponse.status,
-        response: snapData
-      });
-
-      await markPaymentFailed();
-
-      return res.status(502).json({
-        success: false,
-        message: "Midtrans gagal membuat tagihan",
-        order_id: orderId,
-        detail: snapData
-      });
-    }
-
-    snapCreated = true;
-
-    // MENYIMPAN TOKEN DAN TAUTAN PEMBAYARAN
-    currentStep = "menyimpan data pembayaran";
-
-    const updateResponse = await fetch(
-      `${baseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(orderId)}`,
-      {
-        method: "PATCH",
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal"
-        },
-        body: JSON.stringify({
-          snap_token: snapData.token,
-          payment_url: snapData.redirect_url
-        })
-      }
-    );
-
-    if (!updateResponse.ok) {
-      console.error(
-        "PAYMENT_SAVE_ERROR:",
-        await updateResponse.text()
-      );
-
-      // Tagihan sudah dibuat, jadi jangan tandai failed.
-      // Tautan tetap dikirim agar pelanggan bisa membayar.
-      return res.status(201).json({
-        success: true,
-        message: "Tagihan berhasil dibuat, tetapi data pembayaran gagal disimpan ke database",
-        order_id: orderId,
-        product_name: product.product_name,
-        selling_price: hargaJual,
-        snap_token: snapData.token,
-        payment_url: snapData.redirect_url,
-        payment_status: "pending",
-        topup_status: "pending",
-        customer_type: user ? "registered" : "guest",
-        warning: "Simpan tautan pembayaran ini"
-      });
-    }
-
-    // BERHASIL
+    // PESANAN BERHASIL DIBUAT.
+    // TAGIHAN QRIS AKAN DIBUAT OLEH create-payment.js.
     return res.status(201).json({
       success: true,
-      message: "Pesanan dan tagihan Midtrans berhasil dibuat",
+      message: "Pesanan berhasil dibuat",
       order_id: orderId,
       product_name: product.product_name,
+      sku: product.buyer_sku_code,
+      customer_no: customerNo,
       selling_price: hargaJual,
-      snap_token: snapData.token,
-      payment_url: snapData.redirect_url,
       payment_status: "pending",
       topup_status: "pending",
       customer_type: user ? "registered" : "guest"
     });
 
   } catch (error) {
-    console.error("ORDERS_ERROR:", {
-      step: currentStep,
-      orderId,
-      message: error.message,
-      stack: error.stack
-    });
-
-    // Jika pesanan sudah tersimpan tetapi tagihan gagal dibuat,
-    // tandai pembayaran sebagai gagal.
-    await markPaymentFailed();
+    console.error("ORDERS_ERROR:", error.message);
 
     return res.status(500).json({
       success: false,
-      message: "Terjadi kesalahan saat membuat pesanan",
-      step: currentStep,
-      order_id: orderId,
-      detail: error.message
+      message: "Terjadi kesalahan saat membuat pesanan"
     });
   }
 }
+    
