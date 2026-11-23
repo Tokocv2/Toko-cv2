@@ -1,7 +1,28 @@
+
 import crypto from "node:crypto";
 import https from "node:https";
 
 let refreshPromise = null;
+
+function getDigiflazzError(data, statusCode) {
+  const message =
+    data?.message ||
+    data?.msg ||
+    data?.error ||
+    data?.data?.message ||
+    data?.data?.msg;
+
+  if (message) {
+    return `Digiflazz: ${String(message).slice(0, 300)}`;
+  }
+
+  const keys =
+    data && typeof data === "object"
+      ? Object.keys(data).join(",")
+      : typeof data;
+
+  return `Respons Digiflazz tidak valid. HTTP ${statusCode}. Field: ${keys}`;
+}
 
 async function sendDigiflazzRequest(proxyUrl, payload) {
   const agent = new https.Agent({
@@ -26,10 +47,11 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
         },
         (response) => {
           let result = "";
+          let settled = false;
 
           response.setEncoding("utf8");
 
-          response.on("data", chunk => {
+          response.on("data", (chunk) => {
             result += chunk;
 
             if (result.length > 5 * 1024 * 1024) {
@@ -40,24 +62,41 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
           });
 
           response.on("end", () => {
+            if (settled) return;
+            settled = true;
+
             try {
               resolve({
-                statusCode: response.statusCode,
+                statusCode: response.statusCode || 0,
                 data: JSON.parse(result)
               });
             } catch {
               reject(
-                new Error("Respons Digiflazz bukan JSON valid")
+                new Error(
+                  `Respons Digiflazz bukan JSON valid. HTTP ${response.statusCode}`
+                )
               );
             }
           });
 
-          response.on("error", reject);
+          response.on("error", (error) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+          });
+
+          response.on("aborted", () => {
+            if (settled) return;
+            settled = true;
+            reject(new Error("Respons Digiflazz terputus"));
+          });
         }
       );
 
       request.setTimeout(30000, () => {
-        request.destroy(new Error("Koneksi Digiflazz timeout"));
+        request.destroy(
+          new Error("Koneksi Digiflazz timeout")
+        );
       });
 
       request.on("error", reject);
@@ -97,7 +136,7 @@ async function fetchFreshProducts({
     !Array.isArray(data.data)
   ) {
     throw new Error(
-      data?.message || "Data produk Digiflazz tidak valid"
+      getDigiflazzError(data, response.statusCode)
     );
   }
 
@@ -223,7 +262,7 @@ export default async function handler(req, res) {
       return res.status(200).json(cachedProduct);
     }
 
-    // CEGAH PERMINTAAN BERSAMAAN PADA INSTANCE YANG SAMA
+    // CEGAH REFRESH BERSAMAAN PADA INSTANCE YANG SAMA
     try {
       if (!refreshPromise) {
         refreshPromise = fetchFreshProducts({
@@ -241,24 +280,30 @@ export default async function handler(req, res) {
       const freshProducts = await refreshPromise;
 
       return res.status(200).json(freshProducts);
-
     } catch (error) {
       console.error(
         "DIGIFLAZZ_PRODUCTS_ERROR:",
         error.message
       );
 
-      // JIKA DIGIFLAZZ GAGAL, TETAP GUNAKAN CACHE LAMA
-      if (cachedProduct) {
+      // GUNAKAN CACHE LAMA JIKA DIGIFLAZZ GAGAL
+      if (
+        cachedProduct &&
+        Array.isArray(cachedProduct.data)
+      ) {
+        console.warn(
+          "PRODUCTS_CACHE_FALLBACK: Menggunakan cache lama"
+        );
+
         return res.status(200).json(cachedProduct);
       }
 
       return res.status(503).json({
         success: false,
-        message: "Daftar produk sementara tidak tersedia. Silakan coba lagi."
+        message:
+          "Daftar produk sementara tidak tersedia. Silakan coba lagi."
       });
     }
-
   } catch (error) {
     console.error(
       "PRODUCTS_API_ERROR:",
@@ -270,5 +315,4 @@ export default async function handler(req, res) {
       message: "Terjadi kesalahan pada server"
     });
   }
-}
-      
+      }
