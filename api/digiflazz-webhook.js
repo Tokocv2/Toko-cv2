@@ -1,4 +1,3 @@
-
 import crypto from "node:crypto";
 
 export const config = {
@@ -7,7 +6,7 @@ export const config = {
   }
 };
 
-const MAX_BODY_SIZE = 1024 * 1024;
+const MAX_BODY_SIZE = 1 * 1024 * 1024; // 1 MB
 
 function safeEqual(a, b) {
   const first = Buffer.from(String(a));
@@ -21,8 +20,6 @@ function safeEqual(a, b) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-
     return res.status(405).json({
       success: false,
       message: "Method not allowed"
@@ -30,21 +27,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const secret = process.env.DIGIFLAZZ_WEBHOOK_SECRET;
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SECRET_KEY;
-
-    if (!secret || !supabaseUrl || !supabaseKey) {
-      return res.status(500).json({
-        success: false,
-        message: "Environment Variables belum lengkap"
-      });
-    }
-
-    // BACA RAW BODY
-    const contentLength = Number(
-      req.headers["content-length"] || 0
-    );
+    const contentLength = Number(req.headers["content-length"]);
 
     if (
       Number.isFinite(contentLength) &&
@@ -52,36 +35,34 @@ export default async function handler(req, res) {
     ) {
       return res.status(413).json({
         success: false,
-        message: "Payload terlalu besar"
+        message: "Ukuran request terlalu besar"
       });
     }
 
     const chunks = [];
-    let totalBytes = 0;
+    let totalSize = 0;
 
     for await (const chunk of req) {
-      totalBytes += chunk.length;
+      const buffer = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk);
 
-      if (totalBytes > MAX_BODY_SIZE) {
+      totalSize += buffer.length;
+
+      if (totalSize > MAX_BODY_SIZE) {
+        req.destroy();
+
         return res.status(413).json({
           success: false,
-          message: "Payload terlalu besar"
+          message: "Ukuran request terlalu besar"
         });
       }
 
-      chunks.push(chunk);
+      chunks.push(buffer);
     }
 
-    const rawBody = Buffer.concat(chunks);
+    const rawBody = Buffer.concat(chunks, totalSize);
 
-    if (!rawBody.length) {
-      return res.status(400).json({
-        success: false,
-        message: "Body webhook kosong"
-      });
-    }
-
-    // PARSING JSON
     let payload;
 
     try {
@@ -93,29 +74,18 @@ export default async function handler(req, res) {
       });
     }
 
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      Array.isArray(payload)
-    ) {
-      return res.status(400).json({
+    const secret = process.env.DIGIFLAZZ_WEBHOOK_SECRET;
+
+    if (!secret) {
+      return res.status(500).json({
         success: false,
-        message: "Format payload tidak valid"
+        message: "Webhook secret belum tersedia"
       });
     }
 
-    // VERIFIKASI PING DIGIFLAZZ
-    if (
-      payload.sed &&
-      payload.hook_id &&
-      payload.hook
-    ) {
-      const pingSecret = payload.hook.secret;
-
-      if (
-        typeof pingSecret !== "string" ||
-        !safeEqual(pingSecret, secret)
-      ) {
+    // Verifikasi ping Digiflazz
+    if (payload.sed && payload.hook_id && payload.hook) {
+      if (!safeEqual(payload.hook.secret || "", secret)) {
         return res.status(401).json({
           success: false,
           message: "Ping secret tidak valid"
@@ -128,18 +98,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // VERIFIKASI HMAC-SHA1
-    const signature = req.headers["x-hub-signature"];
-
-    if (
-      typeof signature !== "string" ||
-      !/^sha1=[a-f0-9]{40}$/i.test(signature)
-    ) {
-      return res.status(401).json({
-        success: false,
-        message: "Signature tidak valid"
-      });
-    }
+    // Verifikasi signature transaksi
+    const signature = req.headers["x-hub-signature"] || "";
 
     const expected =
       "sha1=" +
@@ -155,129 +115,72 @@ export default async function handler(req, res) {
       });
     }
 
-    // VALIDASI DATA TRANSAKSI
-    const data = payload.data;
-
-    if (
-      !data ||
-      typeof data !== "object" ||
-      Array.isArray(data)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Data transaksi tidak valid"
-      });
-    }
-
+    const data = payload.data || {};
     const orderId = data.ref_id;
-    const customerNo = data.customer_no;
-    const buyerSku = data.buyer_sku_code;
-    const status = String(data.status || "")
-      .trim()
-      .toLowerCase();
+    const status = String(data.status || "").toLowerCase();
 
-    if (
-      typeof orderId !== "string" ||
-      !orderId.trim() ||
-      typeof customerNo !== "string" ||
-      !customerNo.trim() ||
-      typeof buyerSku !== "string" ||
-      !buyerSku.trim()
-    ) {
+    if (!orderId) {
       return res.status(400).json({
         success: false,
-        message: "Identitas transaksi tidak lengkap"
+        message: "Ref ID tidak ditemukan"
       });
     }
 
-    const cleanOrderId = orderId.trim();
-    const cleanCustomerNo = customerNo.trim();
-    const cleanSku = buyerSku.trim();
-
-    if (
-      cleanOrderId.length > 100 ||
-      cleanCustomerNo.length > 200 ||
-      cleanSku.length > 200
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Identitas transaksi tidak valid"
-      });
-    }
-
-    // STATUS FINAL DIGIFLAZZ
-    let topupStatus;
+    let topupStatus = null;
 
     if (status === "sukses") {
       topupStatus = "success";
     } else if (status === "gagal") {
       topupStatus = "failed";
-    } else {
+    }
+
+    if (!topupStatus) {
       return res.status(200).json({
         success: true,
-        message: "Status transaksi belum final",
-        order_id: cleanOrderId
+        message: "Status transaksi belum final"
       });
     }
 
-    const baseUrl =
-      `${supabaseUrl.replace(/\/+$/, "")}/rest/v1/orders`;
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SECRET_KEY;
 
-    const encodedOrderId =
-      encodeURIComponent(cleanOrderId);
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(500).json({
+        success: false,
+        message: "Konfigurasi Supabase belum lengkap"
+      });
+    }
 
-    const headers = {
-      apikey: supabaseKey,
-      Authorization: `Bearer ${supabaseKey}`,
-      "Content-Type": "application/json"
-    };
+    // Hanya pesanan yang sudah dibayar dan belum final
+    const url =
+      `${supabaseUrl.replace(/\/+$/, "")}/rest/v1/orders` +
+      `?order_id=eq.${encodeURIComponent(orderId)}` +
+      `&payment_status=eq.paid` +
+      `&topup_status=in.(processing,pending,retrying)`;
 
-    // UPDATE ATOMIK:
-    // - Pembayaran harus sudah paid.
-    // - SKU dan nomor pelanggan harus cocok.
-    // - Status lama harus pending, processing, atau retrying.
-    // - Status final tidak dapat ditimpa.
-    const updateUrl =
-      `${baseUrl}?order_id=eq.${encodedOrderId}` +
-      `&sku=eq.${encodeURIComponent(cleanSku)}` +
-      `&customer_no=eq.${encodeURIComponent(cleanCustomerNo)}` +
-      "&payment_status=eq.paid" +
-      "&topup_status=in.(processing,pending,retrying)" +
-      "&select=order_id,topup_status";
-
-    const response = await fetch(updateUrl, {
+    const response = await fetch(url, {
       method: "PATCH",
       headers: {
-        ...headers,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        "Content-Type": "application/json",
         Prefer: "return=representation"
       },
       body: JSON.stringify({
         topup_status: topupStatus
-      }),
-      signal: AbortSignal.timeout(15000)
+      })
     });
 
+    const result = await response.text();
+
     if (!response.ok) {
-      console.error(
-        "DIGIFLAZZ_WEBHOOK_SUPABASE_ERROR:",
-        await response.text()
-      );
-
-      throw new Error(
-        "Gagal memperbarui status pesanan"
-      );
+      throw new Error(result);
     }
 
-    const updatedRows = await response.json();
-
-    if (!Array.isArray(updatedRows)) {
-      throw new Error(
-        "Respons Supabase tidak valid"
-      );
-    }
+    const updatedRows = result ? JSON.parse(result) : [];
 
     console.log("DIGIFLAZZ_WEBHOOK_UPDATE:", {
-      orderId: cleanOrderId,
+      orderId,
       topupStatus,
       updatedRows: updatedRows.length
     });
@@ -286,17 +189,14 @@ export default async function handler(req, res) {
       success: true,
       message: updatedRows.length
         ? "Status top-up berhasil diperbarui"
-        : "Pesanan tidak perlu diperbarui atau status sudah final",
-      order_id: cleanOrderId,
+        : "Tidak ada pesanan yang perlu diperbarui",
+      order_id: orderId,
       topup_status: topupStatus,
       updated_rows: updatedRows.length
     });
 
   } catch (error) {
-    console.error(
-      "DIGIFLAZZ_WEBHOOK_ERROR:",
-      error.message
-    );
+    console.error("DIGIFLAZZ_WEBHOOK_ERROR:", error.message);
 
     return res.status(500).json({
       success: false,
@@ -304,3 +204,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
