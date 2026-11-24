@@ -4,8 +4,12 @@ import https from "node:https";
 
 let refreshPromise = null;
 
-const CACHE_DURATION = 5 * 60 * 1000;
-const MAX_STALE_CACHE_AGE = 30 * 60 * 1000;
+// Cache segar selama 30 menit
+const CACHE_DURATION = 30 * 60 * 1000;
+
+// Cache lama boleh digunakan maksimal 24 jam sejak berhasil diperbarui
+const MAX_STALE_CACHE_AGE = 24 * 60 * 60 * 1000;
+
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
 
 function getDigiflazzError(data, statusCode) {
@@ -289,7 +293,7 @@ export default async function handler(req, res) {
       validCacheTime &&
       cacheAge <= MAX_STALE_CACHE_AGE;
 
-    // GUNAKAN CACHE SEGAR
+    // GUNAKAN CACHE SEGAR SELAMA 30 MENIT
     if (cacheIsFresh) {
       return res.status(200).json(cachedProduct);
     }
@@ -318,20 +322,22 @@ export default async function handler(req, res) {
         error.message
       );
 
-      // CACHE LAMA HANYA BOLEH DIPAKAI MAKSIMAL 30 MENIT
+      // JIKA DIGIFLAZZ GAGAL, GUNAKAN CACHE LAMA
+      // SELAMA USIANYA BELUM MELEWATI 24 JAM.
+      // CACHE LAMA TIDAK DIHAPUS KARENA KEGAGALAN INI.
       if (
         cacheIsUsableAsFallback &&
         Array.isArray(cachedProduct.data)
       ) {
         console.warn(
-          "PRODUCTS_CACHE_FALLBACK: Menggunakan cache lama yang masih dalam batas usia"
+          "PRODUCTS_CACHE_FALLBACK: Menggunakan cache lama yang masih dalam batas usia 24 jam"
         );
 
         return res.status(200).json(cachedProduct);
       }
 
       console.error(
-        "PRODUCTS_CACHE_REJECTED: Cache sudah kedaluwarsa atau waktu cache tidak valid"
+        "PRODUCTS_CACHE_REJECTED: Cache sudah melewati batas usia 24 jam atau waktu cache tidak valid"
       );
 
       return res.status(503).json({
