@@ -4,6 +4,8 @@ const sendDigiflazz = require("../lib/digiflazz");
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+
     return res.status(405).json({
       success: false,
       message: "Method not allowed"
@@ -26,7 +28,7 @@ module.exports = async (req, res) => {
       throw new Error("Environment variable belum lengkap");
     }
 
-    const mode = MIDTRANS_MODE.toLowerCase();
+    const mode = String(MIDTRANS_MODE).trim().toLowerCase();
 
     if (!["sandbox", "production"].includes(mode)) {
       throw new Error("MIDTRANS_MODE tidak valid");
@@ -41,11 +43,16 @@ module.exports = async (req, res) => {
       fraud_status
     } = req.body || {};
 
+    // VALIDASI DATA NOTIFIKASI
     if (
-      !order_id ||
-      !status_code ||
-      !gross_amount ||
-      !signature_key
+      typeof order_id !== "string" ||
+      !order_id.trim() ||
+      typeof status_code !== "string" ||
+      !status_code.trim() ||
+      typeof gross_amount !== "string" ||
+      !gross_amount.trim() ||
+      typeof signature_key !== "string" ||
+      typeof transaction_status !== "string"
     ) {
       return res.status(400).json({
         success: false,
@@ -53,19 +60,23 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Validasi format signature SHA512
-    if (!/^[a-f0-9]{128}$/i.test(signature_key)) {
+    const cleanOrderId = order_id.trim();
+
+    if (
+      cleanOrderId.length > 100 ||
+      !/^[a-f0-9]{128}$/i.test(signature_key)
+    ) {
       return res.status(401).json({
         success: false,
-        message: "Format signature tidak valid"
+        message: "Data atau signature tidak valid"
       });
     }
 
-    // Verifikasi signature Midtrans
+    // VERIFIKASI SIGNATURE MIDTRANS
     const expectedSignature = crypto
       .createHash("sha512")
       .update(
-        order_id +
+        cleanOrderId +
         status_code +
         gross_amount +
         MIDTRANS_SERVER_KEY
@@ -94,34 +105,49 @@ module.exports = async (req, res) => {
     const baseUrl =
       `${SUPABASE_URL.replace(/\/+$/, "")}/rest/v1/orders`;
 
-    const encodedOrderId = encodeURIComponent(order_id);
+    const encodedOrderId = encodeURIComponent(cleanOrderId);
 
-    // Cari pesanan
-    const findResponse = await fetch(
-      `${baseUrl}?order_id=eq.${encodedOrderId}` +
-      `&select=order_id,sku,customer_no,selling_price,payment_status,topup_status`,
-      { headers }
-    );
+    // FUNGSI MENGAMBIL PESANAN TERBARU
+    async function getOrder() {
+      const response = await fetch(
+        `${baseUrl}?order_id=eq.${encodedOrderId}` +
+        "&select=order_id,sku,customer_no,selling_price,payment_status,topup_status" +
+        "&limit=1",
+        {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(15000)
+        }
+      );
 
-    if (!findResponse.ok) {
-      throw new Error(await findResponse.text());
+      if (!response.ok) {
+        throw new Error("Gagal mengambil data pesanan");
+      }
+
+      const orders = await response.json();
+
+      return orders[0] || null;
     }
 
-    const orders = await findResponse.json();
+    const order = await getOrder();
 
-    if (!orders.length) {
+    if (!order) {
       return res.status(404).json({
         success: false,
         message: "Pesanan tidak ditemukan"
       });
     }
 
-    const order = orders[0];
+    // VALIDASI NOMINAL
+    const notificationAmount = Number(gross_amount);
+    const orderAmount = Number(order.selling_price);
 
-    // Validasi nominal
     if (
-      !Number.isFinite(Number(gross_amount)) ||
-      Number(gross_amount) !== Number(order.selling_price)
+      !Number.isSafeInteger(notificationAmount) ||
+      notificationAmount <= 0 ||
+      !Number.isSafeInteger(orderAmount) ||
+      orderAmount <= 0 ||
+      notificationAmount !== orderAmount
     ) {
       return res.status(400).json({
         success: false,
@@ -129,96 +155,144 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Tentukan status pembayaran
+    // TENTUKAN STATUS PEMBAYARAN
+    const status = transaction_status.toLowerCase();
+
     const paid =
-      transaction_status === "settlement" ||
+      status === "settlement" ||
       (
-        transaction_status === "capture" &&
-        fraud_status === "accept"
+        status === "capture" &&
+        String(fraud_status || "").toLowerCase() === "accept"
       );
 
     let paymentStatus = "pending";
 
     if (paid) {
       paymentStatus = "paid";
-    } else if (transaction_status === "expire") {
+    } else if (status === "expire") {
       paymentStatus = "expired";
     } else if (
-      transaction_status === "cancel" ||
-      transaction_status === "deny"
+      status === "cancel" ||
+      status === "deny"
     ) {
       paymentStatus = "failed";
+    } else if (
+      status !== "pending" &&
+      status !== "capture"
+    ) {
+      // Status seperti refund/chargeback perlu penanganan terpisah.
+      // Jangan memicu top-up dari status yang tidak dikenal.
+      return res.status(200).json({
+        success: true,
+        message: "Status transaksi tidak memicu proses top-up",
+        order_id: cleanOrderId,
+        transaction_status: status,
+        payment_status: order.payment_status,
+        topup_status: order.topup_status
+      });
     }
 
-    // Notifikasi pembayaran belum berhasil
+    // NOTIFIKASI BELUM BERHASIL DIBAYAR
     if (!paid) {
       if (order.payment_status === "paid") {
         return res.status(200).json({
           success: true,
           message: "Pembayaran sudah tercatat berhasil",
-          order_id,
+          order_id: cleanOrderId,
           payment_status: "paid",
           topup_status: order.topup_status
         });
       }
 
-      if (paymentStatus !== "pending") {
+      if (
+        paymentStatus === "expired" ||
+        paymentStatus === "failed"
+      ) {
         const update = await fetch(
           `${baseUrl}?order_id=eq.${encodedOrderId}` +
-          `&payment_status=eq.pending`,
+          "&payment_status=eq.pending",
           {
             method: "PATCH",
             headers: {
               ...headers,
-              Prefer: "return=minimal"
+              Prefer: "return=representation"
             },
             body: JSON.stringify({
               payment_status: paymentStatus
-            })
+            }),
+            signal: AbortSignal.timeout(15000)
           }
         );
 
         if (!update.ok) {
-          throw new Error(await update.text());
+          throw new Error("Gagal memperbarui status pembayaran");
         }
       }
 
       return res.status(200).json({
         success: true,
-        order_id,
+        order_id: cleanOrderId,
         payment_status: paymentStatus
       });
     }
 
-    // Pembayaran berhasil:
-    // Izinkan pending, expired, atau failed menjadi paid
+    // PEMBAYARAN BERHASIL
+    // Jangan mengubah status lain seperti refunded.
+    if (
+      !["pending", "expired", "failed", "paid"].includes(
+        order.payment_status
+      )
+    ) {
+      return res.status(200).json({
+        success: true,
+        message: "Status pesanan tidak mengizinkan proses top-up",
+        order_id: cleanOrderId,
+        payment_status: order.payment_status
+      });
+    }
+
+    // UBAH STATUS PEMBAYARAN MENJADI PAID
     if (order.payment_status !== "paid") {
       const paymentUpdate = await fetch(
         `${baseUrl}?order_id=eq.${encodedOrderId}` +
-        `&payment_status=in.(pending,expired,failed)`,
+        "&payment_status=in.(pending,expired,failed)",
         {
           method: "PATCH",
           headers: {
             ...headers,
-            Prefer: "return=minimal"
+            Prefer: "return=representation"
           },
           body: JSON.stringify({
             payment_status: "paid"
-          })
+          }),
+          signal: AbortSignal.timeout(15000)
         }
       );
 
       if (!paymentUpdate.ok) {
-        throw new Error(await paymentUpdate.text());
+        throw new Error("Gagal memperbarui status pembayaran");
+      }
+
+      const updatedPayment = await paymentUpdate.json();
+
+      // Jika callback lain lebih dahulu mengubah status,
+      // periksa kembali kondisi pesanan.
+      if (!Array.isArray(updatedPayment) || updatedPayment.length === 0) {
+        const latestOrder = await getOrder();
+
+        if (!latestOrder || latestOrder.payment_status !== "paid") {
+          throw new Error("Status pembayaran belum berhasil diverifikasi");
+        }
       }
     }
 
-    // Klaim atomik: hanya satu proses yang boleh mengirim top-up
+    // KLAIM ATOMIK TOP-UP
+    // Hanya satu callback yang dapat mengubah pending menjadi processing.
     const claimResponse = await fetch(
       `${baseUrl}?order_id=eq.${encodedOrderId}` +
-      `&payment_status=eq.paid` +
-      `&topup_status=eq.pending` +
-      `&select=order_id,sku,customer_no`,
+      "&payment_status=eq.paid" +
+      "&topup_status=eq.pending" +
+      "&select=order_id,sku,customer_no",
       {
         method: "PATCH",
         headers: {
@@ -227,47 +301,59 @@ module.exports = async (req, res) => {
         },
         body: JSON.stringify({
           topup_status: "processing"
-        })
+        }),
+        signal: AbortSignal.timeout(15000)
       }
     );
 
-    const claimedOrders = await claimResponse.json();
-
     if (!claimResponse.ok) {
-      throw new Error(JSON.stringify(claimedOrders));
+      throw new Error("Gagal mengunci proses top-up");
     }
 
-    if (!claimedOrders.length) {
+    const claimedOrders = await claimResponse.json();
+
+    if (
+      !Array.isArray(claimedOrders) ||
+      claimedOrders.length === 0
+    ) {
+      const latestOrder = await getOrder();
+
       return res.status(200).json({
         success: true,
         message: "Pesanan sudah diproses atau sedang diproses",
-        order_id,
-        payment_status: "paid",
-        topup_status: order.topup_status
+        order_id: cleanOrderId,
+        payment_status: latestOrder?.payment_status || "paid",
+        topup_status: latestOrder?.topup_status || "unknown"
       });
     }
 
-    // Kirim transaksi Digiflazz satu kali
+    // KIRIM TOP-UP KE DIGIFLAZZ
     let result;
 
     try {
       result = await sendDigiflazz(claimedOrders[0]);
     } catch (error) {
-      console.error("DIGIFLAZZ_SEND_ERROR:", error.message);
+      console.error(
+        "DIGIFLAZZ_SEND_ERROR:",
+        error.message
+      );
 
+      // Jangan mengembalikan status menjadi pending.
+      // Permintaan mungkin sudah diterima Digiflazz.
       return res.status(200).json({
         success: true,
-        message: "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
-        order_id,
+        message:
+          "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
+        order_id: cleanOrderId,
         payment_status: "paid",
         topup_status: "processing"
       });
     }
 
-    // Tentukan status top-up
+    // TENTUKAN STATUS HASIL DIGIFLAZZ
     const digiflazzStatus = String(
       result?.status || ""
-    ).toLowerCase();
+    ).trim().toLowerCase();
 
     let topupStatus = "processing";
 
@@ -277,10 +363,10 @@ module.exports = async (req, res) => {
       topupStatus = "failed";
     }
 
-    // Simpan hasil hanya jika masih processing
+    // SIMPAN HASIL TOP-UP
     const saveResult = await fetch(
       `${baseUrl}?order_id=eq.${encodedOrderId}` +
-      `&topup_status=eq.processing`,
+      "&topup_status=eq.processing",
       {
         method: "PATCH",
         headers: {
@@ -289,24 +375,35 @@ module.exports = async (req, res) => {
         },
         body: JSON.stringify({
           topup_status: topupStatus
-        })
+        }),
+        signal: AbortSignal.timeout(15000)
       }
     );
 
     if (!saveResult.ok) {
-      throw new Error(await saveResult.text());
+      throw new Error("Gagal menyimpan hasil top-up");
     }
 
     const savedRows = await saveResult.json();
 
+    if (!Array.isArray(savedRows) || savedRows.length !== 1) {
+      const latestOrder = await getOrder();
+
+      return res.status(200).json({
+        success: true,
+        message: "Hasil top-up sudah berubah atau perlu pemeriksaan",
+        order_id: cleanOrderId,
+        payment_status: "paid",
+        topup_status: latestOrder?.topup_status || "processing"
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      message: "Notifikasi pembayaran dan top-up diproses",
-      order_id,
+      message: "Notifikasi pembayaran dan top-up berhasil diproses",
+      order_id: cleanOrderId,
       payment_status: "paid",
-      topup_status: savedRows.length
-        ? topupStatus
-        : "Sudah diperbarui webhook",
+      topup_status: topupStatus,
       digiflazz_status: digiflazzStatus
     });
 
