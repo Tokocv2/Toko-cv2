@@ -10,26 +10,129 @@ export default async function handler(req, res) {
   const mode = String(MIDTRANS_MODE).trim().toLowerCase();
   const midtransServerKey = String(MIDTRANS_SERVER_KEY || "").trim();
 
-  // PEMERIKSAAN KONFIGURASI TANPA TRANSAKSI
+  // GET: DIAGNOSTIK KONFIGURASI DAN AUTENTIKASI MIDTRANS
   if (req.method === "GET") {
+    if (!["sandbox", "production"].includes(mode)) {
+      return res.status(500).json({
+        success: false,
+        diagnostic: true,
+        message: "MIDTRANS_MODE tidak valid",
+        paymentCreated: false
+      });
+    }
+
     const keyFormatValid =
       mode === "sandbox"
         ? midtransServerKey.startsWith("SB-Mid-server-")
-        : mode === "production"
-          ? midtransServerKey.startsWith("Mid-server-")
-          : false;
+        : midtransServerKey.startsWith("Mid-server-");
 
-    return res.status(200).json({
-      success: true,
-      diagnostic: true,
-      mode,
-      supabaseConfigured: Boolean(
-        SUPABASE_URL && SUPABASE_SECRET_KEY
-      ),
-      keyPresent: Boolean(midtransServerKey),
-      keyFormatValid,
-      paymentCreated: false
-    });
+    if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !midtransServerKey) {
+      return res.status(500).json({
+        success: false,
+        diagnostic: true,
+        mode,
+        supabaseConfigured: Boolean(
+          SUPABASE_URL && SUPABASE_SECRET_KEY
+        ),
+        keyPresent: Boolean(midtransServerKey),
+        keyFormatValid,
+        paymentCreated: false,
+        message: "Environment Variables belum lengkap"
+      });
+    }
+
+    if (!keyFormatValid) {
+      return res.status(400).json({
+        success: false,
+        diagnostic: true,
+        mode,
+        keyPresent: true,
+        keyFormatValid: false,
+        authenticated: false,
+        paymentCreated: false,
+        message: "Format Server Key tidak sesuai mode"
+      });
+    }
+
+    const baseUrl =
+      mode === "production"
+        ? "https://api.midtrans.com"
+        : "https://api.sandbox.midtrans.com";
+
+    const auth = Buffer.from(
+      `${midtransServerKey}:`
+    ).toString("base64");
+
+    try {
+      // GET STATUS DENGAN ID KHUSUS.
+      // Tidak membuat transaksi atau pembayaran.
+      const checkResponse = await fetch(
+        `${baseUrl}/v2/TOKOCV2-AUTH-CHECK-NOT-A-TRANSACTION/status`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            Accept: "application/json"
+          },
+          signal: AbortSignal.timeout(10000)
+        }
+      );
+
+      const authenticated =
+        checkResponse.status === 200 ||
+        checkResponse.status === 404;
+
+      let result = "INCONCLUSIVE";
+
+      if (checkResponse.status === 200) {
+        result = "AUTH_OK";
+      } else if (checkResponse.status === 404) {
+        result = "AUTH_OK_TRANSACTION_NOT_FOUND";
+      } else if (
+        checkResponse.status === 401 ||
+        checkResponse.status === 403
+      ) {
+        result = "AUTH_REJECTED";
+      }
+
+      return res.status(200).json({
+        success: true,
+        diagnostic: true,
+        mode,
+        supabaseConfigured: true,
+        keyPresent: true,
+        keyFormatValid: true,
+        authenticated,
+        midtransHttpStatus: checkResponse.status,
+        result,
+        paymentCreated: false,
+        transactionCreated: false,
+        message: authenticated
+          ? "Midtrans menerima autentikasi Server Key"
+          : result === "AUTH_REJECTED"
+            ? "Midtrans menolak autentikasi Server Key"
+            : "Autentikasi belum dapat dipastikan"
+      });
+
+    } catch (error) {
+      console.error(
+        "MIDTRANS_AUTH_CHECK_ERROR:",
+        error.message
+      );
+
+      return res.status(502).json({
+        success: false,
+        diagnostic: true,
+        mode,
+        keyPresent: true,
+        keyFormatValid: true,
+        authenticated: false,
+        result: "CONNECTION_ERROR",
+        paymentCreated: false,
+        transactionCreated: false,
+        message: "Tidak dapat menghubungi server Midtrans"
+      });
+    }
   }
 
   if (req.method !== "POST") {
@@ -353,7 +456,7 @@ export default async function handler(req, res) {
         message:
           payment.status_message ||
           payment.error ||
-          "Midtrans menolak pembuatan pembayaran QRIS"
+          "Midtrans menolak pembuatan pembayaran"
       });
     }
 
@@ -433,4 +536,3 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
-      
