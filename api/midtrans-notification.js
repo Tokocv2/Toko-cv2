@@ -15,7 +15,7 @@ module.exports = async (req, res) => {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
     MIDTRANS_MODE = "sandbox",
-    MIDTRANS_SIGNATURE_KEY
+    MIDTRANS_SERVER_KEY
   } = process.env;
 
   try {
@@ -23,15 +23,14 @@ module.exports = async (req, res) => {
 
     if (!SUPABASE_URL) missing.push("SUPABASE_URL");
     if (!SUPABASE_SECRET_KEY) missing.push("SUPABASE_SECRET_KEY");
-    if (!MIDTRANS_SIGNATURE_KEY) {
-      missing.push("MIDTRANS_SIGNATURE_KEY");
-    }
+    if (!MIDTRANS_SERVER_KEY) missing.push("MIDTRANS_SERVER_KEY");
 
     if (missing.length) {
       console.error(
         "MIDTRANS_NOTIFICATION_MISSING_ENV:",
         missing.join(", ")
       );
+
       throw new Error("Environment variable belum lengkap");
     }
 
@@ -85,7 +84,7 @@ module.exports = async (req, res) => {
         cleanOrderId +
         status_code +
         gross_amount +
-        MIDTRANS_SIGNATURE_KEY
+        MIDTRANS_SERVER_KEY
       )
       .digest("hex");
 
@@ -96,6 +95,11 @@ module.exports = async (req, res) => {
       received.length !== expected.length ||
       !crypto.timingSafeEqual(received, expected)
     ) {
+      console.error(
+        "MIDTRANS_INVALID_SIGNATURE:",
+        cleanOrderId
+      );
+
       return res.status(401).json({
         success: false,
         message: "Signature tidak valid"
@@ -153,6 +157,11 @@ module.exports = async (req, res) => {
       orderAmount <= 0 ||
       notificationAmount !== orderAmount
     ) {
+      console.error(
+        "MIDTRANS_AMOUNT_MISMATCH:",
+        cleanOrderId
+      );
+
       return res.status(400).json({
         success: false,
         message: "Nominal pembayaran tidak cocok"
@@ -232,7 +241,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // PEMBAYARAN BERHASIL
+    // PEMBAYARAN TERLAMBAT
     if (
       order.payment_status === "expired" ||
       order.payment_status === "failed"
@@ -256,7 +265,7 @@ module.exports = async (req, res) => {
     ) {
       return res.status(200).json({
         success: true,
-        message: "Status pesanan tidak mengizinkan proses top-up",
+        message: "Status pesanan tidak mengizinkan top-up",
         order_id: cleanOrderId,
         payment_status: order.payment_status
       });
@@ -292,7 +301,10 @@ module.exports = async (req, res) => {
       ) {
         const latestOrder = await getOrder();
 
-        if (!latestOrder || latestOrder.payment_status !== "paid") {
+        if (
+          !latestOrder ||
+          latestOrder.payment_status !== "paid"
+        ) {
           throw new Error(
             "Status pembayaran belum berhasil diverifikasi"
           );
@@ -301,7 +313,6 @@ module.exports = async (req, res) => {
     }
 
     // PERLINDUNGAN SANDBOX
-    // Jangan pernah mengirim pembelian sungguhan ke Digiflazz.
     if (mode === "sandbox") {
       console.log(
         "MIDTRANS_SANDBOX_PAYMENT_CONFIRMED:",
@@ -310,7 +321,7 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "Pembayaran Sandbox berhasil dicatat. Digiflazz tidak dipanggil.",
+        message: "Pembayaran Sandbox tercatat. Digiflazz tidak dipanggil.",
         order_id: cleanOrderId,
         payment_status: "paid",
         topup_status: order.topup_status
@@ -357,20 +368,64 @@ module.exports = async (req, res) => {
       });
     }
 
+    const claimedOrder = claimedOrders[0];
+
+    // VALIDASI DATA PESANAN SEBELUM DIGIFLAZZ
+    if (
+      claimedOrder.order_id !== cleanOrderId ||
+      claimedOrder.sku !== order.sku ||
+      claimedOrder.customer_no !== order.customer_no
+    ) {
+      console.error(
+        "MIDTRANS_CLAIM_DATA_MISMATCH:",
+        cleanOrderId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Data pesanan tidak cocok. Perlu pemeriksaan manual.",
+        order_id: cleanOrderId,
+        payment_status: "paid",
+        topup_status: "processing"
+      });
+    }
+
     // KIRIM TOP-UP KE DIGIFLAZZ
     let result;
 
     try {
-      result = await sendDigiflazz(claimedOrders[0]);
+      result = await sendDigiflazz(claimedOrder);
     } catch (error) {
       console.error(
-        "DIGIFLAZZ_SEND_ERROR:",
+        "DIGIFLAZZ_RESULT_UNCERTAIN:",
+        cleanOrderId,
         error.message
       );
 
       return res.status(200).json({
         success: true,
-        message: "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
+        message: "Hasil Digiflazz belum dapat dipastikan. Jangan kirim ulang otomatis.",
+        order_id: cleanOrderId,
+        payment_status: "paid",
+        topup_status: "processing"
+      });
+    }
+
+    // VALIDASI IDENTITAS RESPONS DIGIFLAZZ
+    if (
+      !result ||
+      String(result.ref_id || "") !== cleanOrderId ||
+      String(result.buyer_sku_code || "") !== claimedOrder.sku ||
+      String(result.customer_no || "") !== claimedOrder.customer_no
+    ) {
+      console.error(
+        "DIGIFLAZZ_RESPONSE_MISMATCH:",
+        cleanOrderId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Identitas respons Digiflazz tidak cocok. Perlu pemeriksaan manual.",
         order_id: cleanOrderId,
         payment_status: "paid",
         topup_status: "processing"
@@ -387,6 +442,20 @@ module.exports = async (req, res) => {
       topupStatus = "success";
     } else if (digiflazzStatus === "gagal") {
       topupStatus = "failed";
+    } else if (digiflazzStatus !== "pending") {
+      console.error(
+        "DIGIFLAZZ_UNKNOWN_STATUS:",
+        cleanOrderId,
+        digiflazzStatus
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Status Digiflazz tidak dikenali. Perlu pemeriksaan manual.",
+        order_id: cleanOrderId,
+        payment_status: "paid",
+        topup_status: "processing"
+      });
     }
 
     // SIMPAN HASIL TOP-UP
@@ -407,6 +476,11 @@ module.exports = async (req, res) => {
     );
 
     if (!saveResult.ok) {
+      console.error(
+        "DIGIFLAZZ_RESULT_SAVE_FAILED:",
+        cleanOrderId
+      );
+
       throw new Error("Gagal menyimpan hasil top-up");
     }
 
@@ -417,12 +491,18 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "Hasil top-up sudah berubah atau perlu pemeriksaan",
+        message: "Hasil top-up berubah atau perlu pemeriksaan manual",
         order_id: cleanOrderId,
         payment_status: "paid",
         topup_status: latestOrder?.topup_status || "processing"
       });
     }
+
+    console.log(
+      "MIDTRANS_TOPUP_PROCESSED:",
+      cleanOrderId,
+      topupStatus
+    );
 
     return res.status(200).json({
       success: true,
@@ -445,4 +525,3 @@ module.exports = async (req, res) => {
     });
   }
 };
-      
