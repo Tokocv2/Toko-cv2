@@ -1,4 +1,3 @@
-
 const crypto = require("node:crypto");
 const sendDigiflazz = require("../lib/digiflazz");
 
@@ -15,7 +14,7 @@ module.exports = async (req, res) => {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
     MIDTRANS_MODE = "sandbox",
-    MIDTRANS_SIGNATURE_KEY
+    MIDTRANS_SIGNATURE
   } = process.env;
 
   try {
@@ -24,9 +23,7 @@ module.exports = async (req, res) => {
 
     if (!SUPABASE_URL) missing.push("SUPABASE_URL");
     if (!SUPABASE_SECRET_KEY) missing.push("SUPABASE_SECRET_KEY");
-    if (!MIDTRANS_SIGNATURE_KEY) {
-      missing.push("MIDTRANS_SIGNATURE_KEY");
-    }
+    if (!MIDTRANS_SIGNATURE) missing.push("MIDTRANS_SIGNATURE");
 
     if (missing.length) {
       console.error(
@@ -84,14 +81,13 @@ module.exports = async (req, res) => {
     }
 
     // VERIFIKASI SIGNATURE MIDTRANS
-    // Menggunakan Signature Secret Key, bukan Server Key.
     const expectedSignature = crypto
       .createHash("sha512")
       .update(
         cleanOrderId +
         cleanStatusCode +
         cleanGrossAmount +
-        MIDTRANS_SIGNATURE_KEY
+        MIDTRANS_SIGNATURE
       )
       .digest("hex");
 
@@ -142,7 +138,6 @@ module.exports = async (req, res) => {
       }
 
       const orders = await response.json();
-
       return orders[0] || null;
     }
 
@@ -155,7 +150,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // VALIDASI NOMINAL PEMBAYARAN
+    // VALIDASI NOMINAL
     const notificationAmount = Number(cleanGrossAmount);
     const orderAmount = Number(order.selling_price);
 
@@ -242,9 +237,7 @@ module.exports = async (req, res) => {
         );
 
         if (!update.ok) {
-          throw new Error(
-            "Gagal memperbarui status pembayaran"
-          );
+          throw new Error("Gagal memperbarui status pembayaran");
         }
       }
 
@@ -274,9 +267,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    if (
-      !["pending", "paid"].includes(order.payment_status)
-    ) {
+    if (!["pending", "paid"].includes(order.payment_status)) {
       return res.status(200).json({
         success: true,
         message: "Status pesanan tidak mengizinkan top-up",
@@ -304,9 +295,7 @@ module.exports = async (req, res) => {
       );
 
       if (!paymentUpdate.ok) {
-        throw new Error(
-          "Gagal memperbarui status pembayaran"
-        );
+        throw new Error("Gagal memperbarui status pembayaran");
       }
 
       const updatedPayment = await paymentUpdate.json();
@@ -542,3 +531,4 @@ module.exports = async (req, res) => {
     });
   }
 };
+
