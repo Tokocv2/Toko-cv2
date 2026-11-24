@@ -1,4 +1,3 @@
-
 import crypto from "node:crypto";
 
 export default async function handler(req, res) {
@@ -53,7 +52,6 @@ export default async function handler(req, res) {
         success: true,
         message: "Koneksi TOKOCV2 ke Supabase berhasil"
       });
-
     } catch (error) {
       console.error("ORDERS_HEALTH_ERROR:", error.message);
 
@@ -61,7 +59,6 @@ export default async function handler(req, res) {
         success: false,
         message: "Koneksi Supabase gagal"
       });
-
     } finally {
       clearTimeout(timer);
     }
@@ -154,7 +151,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // ID / NOMOR TUJUAN WAJIB UNTUK SEMUA PRODUK
     if (
       typeof player_id !== "string" ||
       !player_id.trim() ||
@@ -167,7 +163,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // SERVER / ZONE ID OPSIONAL
     if (
       player_server !== undefined &&
       player_server !== null &&
@@ -183,7 +178,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // NAMA GAME OPSIONAL UNTUK PRODUK DIGITAL
     if (
       game !== undefined &&
       game !== null &&
@@ -202,9 +196,7 @@ export default async function handler(req, res) {
     const cleanSku = sku.trim();
     const playerId = player_id.trim();
     const playerServer = (player_server || "").trim();
-    const gameName = (game || "").trim();
 
-    // NOMOR TUJUAN UNTUK DIGIFLAZZ
     const customerNo = playerServer
       ? `${playerId}|${playerServer}`
       : playerId;
@@ -260,11 +252,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // CARI SKU PRODUK
     const product = productsResult.data.find(
-      item =>
-        item &&
-        item.buyer_sku_code === cleanSku
+      item => item && item.buyer_sku_code === cleanSku
     );
 
     if (!product) {
@@ -289,7 +278,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // HITUNG HARGA JUAL DENGAN MARKUP 13%
+    // MARKUP 13%
     const hargaJual = Math.round(modal * 1.13);
     const untung = hargaJual - modal;
 
@@ -303,7 +292,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // BUAT ID PESANAN UNIK
+    // ID PESANAN UNIK
     const orderId = `TCV2-${crypto.randomUUID()}`;
 
     const productName =
@@ -311,6 +300,18 @@ export default async function handler(req, res) {
       product.product_name.trim()
         ? product.product_name.trim()
         : cleanSku;
+
+    // TOKEN KHUSUS PEMBELI TAMU
+    const guestAccessToken = user
+      ? null
+      : crypto.randomBytes(32).toString("base64url");
+
+    const guestAccessTokenHash = guestAccessToken
+      ? crypto
+          .createHash("sha256")
+          .update(guestAccessToken, "utf8")
+          .digest("hex")
+      : null;
 
     // SIMPAN PESANAN KE SUPABASE
     const saveResponse = await fetch(
@@ -333,7 +334,9 @@ export default async function handler(req, res) {
           selling_price: hargaJual,
           profit: untung,
 
-          // STATUS AWAL PESANAN
+          // SIMPAN HASH TOKEN SAJA
+          guest_access_token_hash: guestAccessTokenHash,
+
           payment_status: "pending",
           payment_creation_status: "idle",
           topup_status: "pending"
@@ -383,7 +386,6 @@ export default async function handler(req, res) {
     }
 
     // PESANAN BERHASIL DIBUAT
-    // QRIS AKAN DIBUAT OLEH api/create-payment.js
     return res.status(201).json({
       success: true,
       message: "Pesanan berhasil dibuat",
@@ -395,7 +397,10 @@ export default async function handler(req, res) {
       payment_status: "pending",
       payment_creation_status: "idle",
       topup_status: "pending",
-      customer_type: user ? "registered" : "guest"
+      customer_type: user ? "registered" : "guest",
+
+      // TOKEN ASLI HANYA DIKIRIM KE PEMBELI TAMU
+      guest_access_token: guestAccessToken
     });
 
   } catch (error) {
@@ -423,4 +428,3 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
-        
