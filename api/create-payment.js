@@ -383,9 +383,11 @@ export default async function handler(req, res) {
         )
       : null;
 
+    // Midtrans dapat mengembalikan status_code 200 atau 201.
+    // Keduanya diterima jika seluruh data transaksi valid.
     const validPayment =
       payment &&
-      String(payment.status_code) === "200" &&
+      ["200", "201"].includes(String(payment.status_code)) &&
       payment.order_id === order.order_id &&
       typeof payment.transaction_id === "string" &&
       payment.transaction_id.length > 0 &&
@@ -499,5 +501,5 @@ export default async function handler(req, res) {
   } finally {
     clearTimeout(timer);
   }
-}
-      
+    }
+  
