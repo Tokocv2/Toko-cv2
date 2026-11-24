@@ -3093,10 +3093,16 @@ function showTokocv2Payment(result) {
       'app.sandbox.midtrans.com'
     ];
 
+    const allowedSnapPath =
+      /^\/snap\/(?:v2\/vtweb|v3\/redirection|v4\/redirection)\/[A-Za-z0-9-]+\/?$/;
+
     const validUrl =
       target.protocol === 'https:' &&
       allowedHosts.includes(target.hostname) &&
-      target.pathname.startsWith('/snap/v2/vtweb/');
+      target.port === '' &&
+      target.username === '' &&
+      target.password === '' &&
+      allowedSnapPath.test(target.pathname);
 
     if (!validUrl) {
       throw new Error(
