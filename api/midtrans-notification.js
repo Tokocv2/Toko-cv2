@@ -1,5 +1,5 @@
 
-const crypto = require("crypto");
+const crypto = require("node:crypto");
 const sendDigiflazz = require("../lib/digiflazz");
 
 module.exports = async (req, res) => {
@@ -20,11 +20,20 @@ module.exports = async (req, res) => {
   } = process.env;
 
   try {
-    if (
-      !SUPABASE_URL ||
-      !SUPABASE_SECRET_KEY ||
-      !MIDTRANS_SIGNATURE_KEY
-    ) {
+    const missing = [];
+
+    if (!SUPABASE_URL) missing.push("SUPABASE_URL");
+    if (!SUPABASE_SECRET_KEY) missing.push("SUPABASE_SECRET_KEY");
+    if (!MIDTRANS_SIGNATURE_KEY) {
+      missing.push("MIDTRANS_SIGNATURE_KEY");
+    }
+
+    if (missing.length) {
+      console.error(
+        "MIDTRANS_NOTIFICATION_MISSING_ENV:",
+        missing.join(", ")
+      );
+
       throw new Error("Environment variable belum lengkap");
     }
 
@@ -43,7 +52,6 @@ module.exports = async (req, res) => {
       fraud_status
     } = req.body || {};
 
-    // VALIDASI DATA NOTIFIKASI
     if (
       typeof order_id !== "string" ||
       !order_id.trim() ||
@@ -73,7 +81,6 @@ module.exports = async (req, res) => {
     }
 
     // VERIFIKASI SIGNATURE MIDTRANS
-    // Menggunakan Signature Secret Key, bukan Server Key.
     const expectedSignature = crypto
       .createHash("sha512")
       .update(
@@ -108,7 +115,6 @@ module.exports = async (req, res) => {
 
     const encodedOrderId = encodeURIComponent(cleanOrderId);
 
-    // FUNGSI MENGAMBIL PESANAN TERBARU
     async function getOrder() {
       const response = await fetch(
         `${baseUrl}?order_id=eq.${encodedOrderId}` +
@@ -157,7 +163,7 @@ module.exports = async (req, res) => {
     }
 
     // TENTUKAN STATUS PEMBAYARAN
-    const status = transaction_status.toLowerCase();
+    const status = transaction_status.trim().toLowerCase();
 
     const paid =
       status === "settlement" ||
@@ -172,17 +178,9 @@ module.exports = async (req, res) => {
       paymentStatus = "paid";
     } else if (status === "expire") {
       paymentStatus = "expired";
-    } else if (
-      status === "cancel" ||
-      status === "deny"
-    ) {
+    } else if (status === "cancel" || status === "deny") {
       paymentStatus = "failed";
-    } else if (
-      status !== "pending" &&
-      status !== "capture"
-    ) {
-      // Status seperti refund/chargeback perlu penanganan terpisah.
-      // Jangan memicu top-up dari status yang tidak dikenal.
+    } else if (status !== "pending" && status !== "capture") {
       return res.status(200).json({
         success: true,
         message: "Status transaksi tidak memicu proses top-up",
@@ -193,7 +191,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // NOTIFIKASI BELUM BERHASIL DIBAYAR
+    // PEMBAYARAN BELUM BERHASIL
     if (!paid) {
       if (order.payment_status === "paid") {
         return res.status(200).json({
@@ -238,11 +236,28 @@ module.exports = async (req, res) => {
     }
 
     // PEMBAYARAN BERHASIL
-    // Jangan mengubah status lain seperti refunded.
+    // Status expired/failed tidak otomatis diaktifkan kembali.
+    // Pembayaran terlambat harus diperiksa secara manual.
     if (
-      !["pending", "expired", "failed", "paid"].includes(
-        order.payment_status
-      )
+      order.payment_status === "expired" ||
+      order.payment_status === "failed"
+    ) {
+      console.error(
+        "MIDTRANS_LATE_PAYMENT_REVIEW:",
+        cleanOrderId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Pembayaran terlambat perlu pemeriksaan manual",
+        order_id: cleanOrderId,
+        payment_status: order.payment_status,
+        topup_status: order.topup_status
+      });
+    }
+
+    if (
+      !["pending", "paid"].includes(order.payment_status)
     ) {
       return res.status(200).json({
         success: true,
@@ -252,11 +267,11 @@ module.exports = async (req, res) => {
       });
     }
 
-    // UBAH STATUS PEMBAYARAN MENJADI PAID
-    if (order.payment_status !== "paid") {
+    // UBAH PEMBAYARAN PENDING MENJADI PAID
+    if (order.payment_status === "pending") {
       const paymentUpdate = await fetch(
         `${baseUrl}?order_id=eq.${encodedOrderId}` +
-        "&payment_status=in.(pending,expired,failed)",
+        "&payment_status=eq.pending",
         {
           method: "PATCH",
           headers: {
@@ -276,13 +291,16 @@ module.exports = async (req, res) => {
 
       const updatedPayment = await paymentUpdate.json();
 
-      // Jika callback lain lebih dahulu mengubah status,
-      // periksa kembali kondisi pesanan.
-      if (!Array.isArray(updatedPayment) || updatedPayment.length === 0) {
+      if (
+        !Array.isArray(updatedPayment) ||
+        updatedPayment.length === 0
+      ) {
         const latestOrder = await getOrder();
 
         if (!latestOrder || latestOrder.payment_status !== "paid") {
-          throw new Error("Status pembayaran belum berhasil diverifikasi");
+          throw new Error(
+            "Status pembayaran belum berhasil diverifikasi"
+          );
         }
       }
     }
@@ -339,21 +357,19 @@ module.exports = async (req, res) => {
         error.message
       );
 
-      // Jangan mengembalikan status menjadi pending.
-      // Permintaan mungkin sudah diterima Digiflazz.
+      // Jangan kirim ulang otomatis.
+      // Transaksi mungkin sudah diterima Digiflazz.
       return res.status(200).json({
         success: true,
-        message:
-          "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
+        message: "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
         order_id: cleanOrderId,
         payment_status: "paid",
         topup_status: "processing"
       });
     }
 
-    // TENTUKAN STATUS HASIL DIGIFLAZZ
     const digiflazzStatus = String(
-      result?.status || ""
+      result.status || ""
     ).trim().toLowerCase();
 
     let topupStatus = "processing";
@@ -420,4 +436,4 @@ module.exports = async (req, res) => {
     });
   }
 };
-  
+      
