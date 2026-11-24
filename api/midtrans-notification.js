@@ -1,3 +1,4 @@
+
 const crypto = require("node:crypto");
 const sendDigiflazz = require("../lib/digiflazz");
 
@@ -14,7 +15,7 @@ module.exports = async (req, res) => {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
     MIDTRANS_MODE = "sandbox",
-    MIDTRANS_SIGNATURE
+    MIDTRANS_SIGNATURE_SECRET
   } = process.env;
 
   try {
@@ -23,7 +24,9 @@ module.exports = async (req, res) => {
 
     if (!SUPABASE_URL) missing.push("SUPABASE_URL");
     if (!SUPABASE_SECRET_KEY) missing.push("SUPABASE_SECRET_KEY");
-    if (!MIDTRANS_SIGNATURE) missing.push("MIDTRANS_SIGNATURE");
+    if (!MIDTRANS_SIGNATURE_SECRET) {
+      missing.push("MIDTRANS_SIGNATURE_SECRET");
+    }
 
     if (missing.length) {
       console.error(
@@ -87,7 +90,7 @@ module.exports = async (req, res) => {
         cleanOrderId +
         cleanStatusCode +
         cleanGrossAmount +
-        MIDTRANS_SIGNATURE
+        MIDTRANS_SIGNATURE_SECRET
       )
       .digest("hex");
 
@@ -531,4 +534,4 @@ module.exports = async (req, res) => {
     });
   }
 };
-
+      
