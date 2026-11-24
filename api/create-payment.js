@@ -1,12 +1,5 @@
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({
-      success: false,
-      message: "Method not allowed"
-    });
-  }
-
   const {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
@@ -14,19 +7,48 @@ export default async function handler(req, res) {
     MIDTRANS_SERVER_KEY
   } = process.env;
 
+  const mode = String(MIDTRANS_MODE).trim().toLowerCase();
+  const midtransServerKey = String(MIDTRANS_SERVER_KEY || "").trim();
+
+  // PEMERIKSAAN KONFIGURASI TANPA TRANSAKSI
+  if (req.method === "GET") {
+    const keyFormatValid =
+      mode === "sandbox"
+        ? midtransServerKey.startsWith("SB-Mid-server-")
+        : mode === "production"
+          ? midtransServerKey.startsWith("Mid-server-")
+          : false;
+
+    return res.status(200).json({
+      success: true,
+      diagnostic: true,
+      mode,
+      supabaseConfigured: Boolean(
+        SUPABASE_URL && SUPABASE_SECRET_KEY
+      ),
+      keyPresent: Boolean(midtransServerKey),
+      keyFormatValid,
+      paymentCreated: false
+    });
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      success: false,
+      message: "Method not allowed"
+    });
+  }
+
   if (
     !SUPABASE_URL ||
     !SUPABASE_SECRET_KEY ||
-    !MIDTRANS_SERVER_KEY
+    !midtransServerKey
   ) {
     return res.status(500).json({
       success: false,
       message: "Environment Variables belum lengkap"
     });
   }
-
-  const mode = String(MIDTRANS_MODE).trim().toLowerCase();
-  const midtransServerKey = String(MIDTRANS_SERVER_KEY).trim();
 
   if (!["sandbox", "production"].includes(mode)) {
     return res.status(500).json({
@@ -35,13 +57,10 @@ export default async function handler(req, res) {
     });
   }
 
-  // VALIDASI FORMAT SERVER KEY
   if (
     mode === "sandbox" &&
     !midtransServerKey.startsWith("SB-Mid-server-")
   ) {
-    console.error("MIDTRANS_CONFIG_ERROR: Format Sandbox Server Key tidak sesuai");
-
     return res.status(500).json({
       success: false,
       message: "Server Key tidak sesuai dengan mode Sandbox"
@@ -52,28 +71,13 @@ export default async function handler(req, res) {
     mode === "production" &&
     !midtransServerKey.startsWith("Mid-server-")
   ) {
-    console.error("MIDTRANS_CONFIG_ERROR: Format Production Server Key tidak sesuai");
-
     return res.status(500).json({
       success: false,
       message: "Server Key tidak sesuai dengan mode Production"
     });
   }
 
-  console.log("MIDTRANS_CONFIG_CHECK:", {
-    mode,
-    keyPresent: Boolean(midtransServerKey),
-    keyFormatValid: mode === "sandbox"
-      ? midtransServerKey.startsWith("SB-Mid-server-")
-      : midtransServerKey.startsWith("Mid-server-"),
-    keyLength: midtransServerKey.length
-  });
-
-  const {
-    order_id,
-    sku,
-    customer_no
-  } = req.body || {};
+  const { order_id, sku, customer_no } = req.body || {};
 
   if (
     typeof order_id !== "string" ||
@@ -90,11 +94,12 @@ export default async function handler(req, res) {
   }
 
   const cleanOrderId = order_id.trim();
+  const supabaseUrl = SUPABASE_URL.replace(/\/+$/, "");
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
 
   let lockClaimed = false;
-  let supabaseUrl;
 
   const headers = {
     apikey: SUPABASE_SECRET_KEY,
@@ -127,8 +132,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    supabaseUrl = SUPABASE_URL.replace(/\/+$/, "");
-
     // LOGIN OPSIONAL
     let user = null;
     const authorization = req.headers.authorization;
@@ -180,7 +183,7 @@ export default async function handler(req, res) {
 
     // CARI PESANAN
     const params = new URLSearchParams({
-      select: "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status,payment_creation_status,payment_url",
+      select: "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status,payment_creation_status",
       order_id: `eq.${cleanOrderId}`,
       limit: "1"
     });
@@ -230,7 +233,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // CEK PENGUNCI PEMBAYARAN
     if (
       order.payment_creation_status === "creating" ||
       order.payment_creation_status === "created"
@@ -245,16 +247,13 @@ export default async function handler(req, res) {
     if (order.payment_creation_status !== "idle") {
       return res.status(409).json({
         success: false,
-        message: "Status penguncian pembayaran tidak dikenal. Perlu pemeriksaan."
+        message: "Status penguncian pembayaran tidak dikenal."
       });
     }
 
     const amount = Number(order.selling_price);
 
-    if (
-      !Number.isSafeInteger(amount) ||
-      amount <= 0
-    ) {
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Nominal pembayaran tidak valid"
@@ -341,7 +340,6 @@ export default async function handler(req, res) {
       throw new Error("Respons Midtrans tidak dapat dibaca");
     }
 
-    // JIKA MIDTRANS MENOLAK
     if (!midtransResponse.ok) {
       console.error("MIDTRANS_CREATE_ERROR:", {
         httpStatus: midtransResponse.status,
@@ -359,14 +357,13 @@ export default async function handler(req, res) {
       });
     }
 
-    // AMBIL LINK QRIS
+    // SIMPAN STATUS PEMBAYARAN
     const qrAction = Array.isArray(payment.actions)
       ? payment.actions.find(
           action => action.name === "generate-qr-code"
         )
       : null;
 
-    // SIMPAN STATUS PEMBAYARAN
     const updateResponse = await fetch(
       `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating`,
       {
@@ -409,10 +406,7 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error(
-      "CREATE_PAYMENT_ERROR:",
-      error.message
-    );
+    console.error("CREATE_PAYMENT_ERROR:", error.message);
 
     if (
       error.name === "AbortError" ||
@@ -439,3 +433,4 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
+      
