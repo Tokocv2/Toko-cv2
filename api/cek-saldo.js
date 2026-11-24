@@ -1,6 +1,7 @@
-
 import crypto from "node:crypto";
 import https from "node:https";
+
+const MAX_RESPONSE_SIZE = 1024 * 1024;
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -80,25 +81,44 @@ export default async function handler(req, res) {
           }
         },
         (response) => {
-          let data = "";
+          const chunks = [];
+          let totalBytes = 0;
+          let tooLarge = false;
 
-          response.setEncoding("utf8");
+          response.on("data", (chunk) => {
+            if (tooLarge) return;
 
-          response.on("data", chunk => {
-            data += chunk;
+            const buffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
 
-            if (data.length > 1024 * 1024) {
+            totalBytes += buffer.byteLength;
+
+            if (totalBytes > MAX_RESPONSE_SIZE) {
+              tooLarge = true;
+              chunks.length = 0;
+
               response.destroy(
                 new Error("Respons Digiflazz terlalu besar")
               );
+
+              return;
             }
+
+            chunks.push(buffer);
           });
 
           response.on("end", () => {
+            if (tooLarge) return;
+
             try {
+              const responseText = Buffer
+                .concat(chunks, totalBytes)
+                .toString("utf8");
+
               resolve({
                 statusCode: response.statusCode,
-                data: JSON.parse(data)
+                data: JSON.parse(responseText)
               });
             } catch {
               reject(
@@ -143,3 +163,4 @@ export default async function handler(req, res) {
     if (agent) agent.destroy();
   }
 }
+
