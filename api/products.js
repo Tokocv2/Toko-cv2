@@ -6,7 +6,7 @@ let refreshPromise = null;
 
 const CACHE_DURATION = 5 * 60 * 1000;
 const MAX_STALE_CACHE_AGE = 30 * 60 * 1000;
-const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
+const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
 
 function getDigiflazzError(data, statusCode) {
   const message =
@@ -65,12 +65,14 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
 
             if (totalBytes > MAX_RESPONSE_SIZE) {
               settled = true;
-              response.destroy();
 
               reject(
-                new Error("Respons Digiflazz melebihi batas 5 MB")
+                new Error(
+                  "Respons Digiflazz melebihi batas 5 MB"
+                )
               );
 
+              response.destroy();
               return;
             }
 
@@ -308,6 +310,7 @@ export default async function handler(req, res) {
       }
 
       const freshProducts = await refreshPromise;
+
       return res.status(200).json(freshProducts);
     } catch (error) {
       console.error(
