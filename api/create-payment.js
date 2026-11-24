@@ -1,4 +1,3 @@
-
 import crypto from "node:crypto";
 
 function safeEqual(a, b) {
@@ -11,7 +10,7 @@ function safeEqual(a, b) {
   );
 }
 
-// Validasi URL Snap v2 dan v3
+// VALIDASI URL SNAP V2, V3, DAN V4
 function validateSnapRedirectUrl(value, mode) {
   if (typeof value !== "string" || !value.trim()) {
     return null;
@@ -26,7 +25,7 @@ function validateSnapRedirectUrl(value, mode) {
         : "app.sandbox.midtrans.com";
 
     const allowedPath =
-      /^\/snap\/(?:v2\/vtweb|v3\/redirection)\/[A-Za-z0-9-]+\/?$/;
+      /^\/snap\/(?:v2\/vtweb|v3\/redirection|v4\/redirection)\/[A-Za-z0-9-]+\/?$/;
 
     if (
       parsedUrl.protocol !== "https:" ||
@@ -386,7 +385,7 @@ export default async function handler(req, res) {
 
     lockClaimed = true;
 
-    // MIDTRANS SNAP: SEMUA METODE AKTIF DI AKUN
+    // MIDTRANS SNAP
     const snapUrl =
       mode === "production"
         ? "https://app.midtrans.com/snap/v1/transactions"
@@ -438,7 +437,6 @@ export default async function handler(req, res) {
         response: payment
       });
 
-      // Respons 5xx bisa bersifat ambigu.
       if (snapResponse.status >= 500) {
         return res.status(502).json({
           success: false,
@@ -460,7 +458,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // VALIDASI TOKEN DAN URL CHECKOUT SNAP V2 / V3
+    // VALIDASI TOKEN DAN URL CHECKOUT
     const redirectUrl = validateSnapRedirectUrl(
       payment?.redirect_url,
       mode
@@ -600,4 +598,4 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
-  
+          
