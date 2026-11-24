@@ -1,3 +1,4 @@
+
 import crypto from "node:crypto";
 
 function safeEqual(a, b) {
@@ -8,6 +9,40 @@ function safeEqual(a, b) {
     first.length === second.length &&
     crypto.timingSafeEqual(first, second)
   );
+}
+
+// Validasi URL Snap v2 dan v3
+function validateSnapRedirectUrl(value, mode) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+
+    const allowedHost =
+      mode === "production"
+        ? "app.midtrans.com"
+        : "app.sandbox.midtrans.com";
+
+    const allowedPath =
+      /^\/snap\/(?:v2\/vtweb|v3\/redirection)\/[A-Za-z0-9-]+\/?$/;
+
+    if (
+      parsedUrl.protocol !== "https:" ||
+      parsedUrl.hostname !== allowedHost ||
+      parsedUrl.port ||
+      parsedUrl.username ||
+      parsedUrl.password ||
+      !allowedPath.test(parsedUrl.pathname)
+    ) {
+      return null;
+    }
+
+    return parsedUrl.toString();
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(req, res) {
@@ -425,39 +460,39 @@ export default async function handler(req, res) {
       });
     }
 
-    // VALIDASI TOKEN DAN URL CHECKOUT
-    let redirectUrl = null;
-
-    try {
-      const parsedUrl = new URL(payment.redirect_url);
-
-      const allowedHost =
-        mode === "production"
-          ? "app.midtrans.com"
-          : "app.sandbox.midtrans.com";
-
-      if (
-        parsedUrl.protocol === "https:" &&
-        parsedUrl.hostname === allowedHost &&
-        parsedUrl.pathname.startsWith("/snap/v2/vtweb/")
-      ) {
-        redirectUrl = parsedUrl.toString();
-      }
-    } catch {
-      redirectUrl = null;
-    }
+    // VALIDASI TOKEN DAN URL CHECKOUT SNAP V2 / V3
+    const redirectUrl = validateSnapRedirectUrl(
+      payment?.redirect_url,
+      mode
+    );
 
     if (
       snapResponse.status !== 201 ||
-      typeof payment.token !== "string" ||
-      !payment.token ||
+      typeof payment?.token !== "string" ||
+      !payment.token.trim() ||
       !redirectUrl
     ) {
+      let urlInfo = null;
+
+      try {
+        const parsed = new URL(payment?.redirect_url);
+
+        urlInfo = {
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          pathname: parsed.pathname
+        };
+      } catch {
+        urlInfo = "URL tidak valid";
+      }
+
       console.error("MIDTRANS_SNAP_INVALID_RESPONSE:", {
         orderId: cleanOrderId,
         httpStatus: snapResponse.status,
-        hasToken: Boolean(payment?.token),
-        hasRedirectUrl: Boolean(payment?.redirect_url)
+        tokenType: typeof payment?.token,
+        tokenLength: payment?.token?.length || 0,
+        redirectUrl: urlInfo,
+        redirectAccepted: Boolean(redirectUrl)
       });
 
       return res.status(502).json({
@@ -565,4 +600,4 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
-        
+  
