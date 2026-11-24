@@ -1,3 +1,14 @@
+import crypto from "node:crypto";
+
+function safeEqual(a, b) {
+  const first = Buffer.from(String(a));
+  const second = Buffer.from(String(b));
+
+  return (
+    first.length === second.length &&
+    crypto.timingSafeEqual(first, second)
+  );
+}
 
 export default async function handler(req, res) {
   const {
@@ -8,11 +19,10 @@ export default async function handler(req, res) {
   } = process.env;
 
   const mode = String(MIDTRANS_MODE).trim().toLowerCase();
-  const midtransServerKey = String(MIDTRANS_SERVER_KEY || "").trim();
+  const serverKey = String(MIDTRANS_SERVER_KEY || "").trim();
 
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-
     return res.status(405).json({
       success: false,
       message: "Method not allowed"
@@ -26,26 +36,31 @@ export default async function handler(req, res) {
     });
   }
 
-  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !midtransServerKey) {
+  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !serverKey) {
     return res.status(500).json({
       success: false,
       message: "Environment Variables belum lengkap"
     });
   }
 
-  const keyFormatValid =
+  const keyValid =
     mode === "sandbox"
-      ? midtransServerKey.startsWith("SB-Mid-server-")
-      : midtransServerKey.startsWith("Mid-server-");
+      ? serverKey.startsWith("SB-Mid-server-")
+      : serverKey.startsWith("Mid-server-");
 
-  if (!keyFormatValid) {
+  if (!keyValid) {
     return res.status(500).json({
       success: false,
       message: "Server Key tidak sesuai dengan mode Midtrans"
     });
   }
 
-  const { order_id, sku, customer_no } = req.body || {};
+  const {
+    order_id,
+    sku,
+    customer_no,
+    guest_access_token
+  } = req.body || {};
 
   if (
     typeof order_id !== "string" ||
@@ -66,7 +81,8 @@ export default async function handler(req, res) {
   const cleanCustomerNo = customer_no.trim();
 
   if (
-    cleanOrderId.length > 100 ||
+    cleanOrderId.length > 50 ||
+    !/^[A-Za-z0-9._~-]+$/.test(cleanOrderId) ||
     cleanSku.length > 200 ||
     cleanCustomerNo.length > 200
   ) {
@@ -118,10 +134,10 @@ export default async function handler(req, res) {
         throw new Error("Gagal melepaskan pengunci pembayaran");
       }
 
-      const updatedRows = await response.json();
+      const rows = await response.json();
 
-      if (!Array.isArray(updatedRows) || updatedRows.length !== 1) {
-        throw new Error("Status pengunci tidak berhasil diverifikasi");
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        throw new Error("Pengunci pembayaran gagal diverifikasi");
       }
 
       lockClaimed = false;
@@ -131,7 +147,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // LOGIN OPSIONAL
+    // VERIFIKASI LOGIN OPSIONAL
     let user = null;
 
     const authorization = req.headers.authorization;
@@ -144,9 +160,9 @@ export default async function handler(req, res) {
         });
       }
 
-      const token = authorization.slice(7).trim();
+      const loginToken = authorization.slice(7).trim();
 
-      if (!token) {
+      if (!loginToken) {
         return res.status(401).json({
           success: false,
           message: "Token login kosong"
@@ -159,7 +175,7 @@ export default async function handler(req, res) {
           method: "GET",
           headers: {
             apikey: SUPABASE_SECRET_KEY,
-            Authorization: `Bearer ${token}`
+            Authorization: `Bearer ${loginToken}`
           },
           signal: controller.signal
         }
@@ -182,10 +198,24 @@ export default async function handler(req, res) {
       }
     }
 
-    // CARI PESANAN
+    // TOKEN WAJIB UNTUK PEMBELI TAMU
+    if (!user) {
+      if (
+        typeof guest_access_token !== "string" ||
+        guest_access_token.length < 20 ||
+        guest_access_token.length > 200
+      ) {
+        return res.status(401).json({
+          success: false,
+          message: "Token akses pesanan tamu tidak valid"
+        });
+      }
+    }
+
+    // AMBIL PESANAN MILIK PEMBELI
     const params = new URLSearchParams({
       select:
-        "order_id,user_id,sku,customer_no,product_name,selling_price,payment_status,payment_creation_status",
+        "order_id,user_id,guest_access_token_hash,sku,customer_no,product_name,selling_price,payment_status,payment_creation_status",
       order_id: `eq.${cleanOrderId}`,
       limit: "1"
     });
@@ -219,6 +249,28 @@ export default async function handler(req, res) {
       });
     }
 
+    // VERIFIKASI SHA-256 TOKEN TAMU
+    if (!user) {
+      const storedHash = order.guest_access_token_hash;
+
+      const suppliedHash = crypto
+        .createHash("sha256")
+        .update(guest_access_token, "utf8")
+        .digest("hex");
+
+      if (
+        typeof storedHash !== "string" ||
+        !/^[a-f0-9]{64}$/i.test(storedHash) ||
+        !safeEqual(suppliedHash, storedHash.toLowerCase())
+      ) {
+        return res.status(404).json({
+          success: false,
+          message: "Pesanan tidak ditemukan"
+        });
+      }
+    }
+
+    // VALIDASI DATA PESANAN
     if (
       order.sku !== cleanSku ||
       order.customer_no !== cleanCustomerNo
@@ -243,7 +295,7 @@ export default async function handler(req, res) {
       return res.status(409).json({
         success: false,
         message:
-          "Pembayaran untuk pesanan ini sudah diproses. Jangan membuat tagihan baru.",
+          "Pembayaran sudah diproses. Jangan membuat tagihan baru.",
         order_id: cleanOrderId
       });
     }
@@ -299,19 +351,17 @@ export default async function handler(req, res) {
 
     lockClaimed = true;
 
-    // MIDTRANS QRIS
-    const midtransUrl =
+    // MIDTRANS SNAP: SEMUA METODE AKTIF DI AKUN
+    const snapUrl =
       mode === "production"
-        ? "https://api.midtrans.com/v2/charge"
-        : "https://api.sandbox.midtrans.com/v2/charge";
+        ? "https://app.midtrans.com/snap/v1/transactions"
+        : "https://app.sandbox.midtrans.com/snap/v1/transactions";
 
-    const auth = Buffer.from(
-      `${midtransServerKey}:`
-    ).toString("base64");
+    const auth = Buffer.from(`${serverKey}:`).toString("base64");
 
     midtransRequestStarted = true;
 
-    const midtransResponse = await fetch(midtransUrl, {
+    const snapResponse = await fetch(snapUrl, {
       method: "POST",
       headers: {
         Authorization: `Basic ${auth}`,
@@ -319,22 +369,21 @@ export default async function handler(req, res) {
         Accept: "application/json"
       },
       body: JSON.stringify({
-        payment_type: "qris",
         transaction_details: {
           order_id: order.order_id,
           gross_amount: amount
         },
-        qris: {
-          acquirer: "gopay"
-        },
         item_details: [
           {
-            id: order.sku,
+            id: cleanSku,
             price: amount,
             quantity: 1,
-            name: order.product_name || order.sku
+            name: String(order.product_name || cleanSku).slice(0, 50)
           }
-        ]
+        ],
+        credit_card: {
+          secure: true
+        }
       }),
       signal: controller.signal
     });
@@ -342,67 +391,85 @@ export default async function handler(req, res) {
     let payment;
 
     try {
-      payment = await midtransResponse.json();
+      payment = await snapResponse.json();
     } catch {
-      throw new Error("Respons Midtrans tidak dapat dibaca");
+      throw new Error("Respons Snap Midtrans tidak dapat dibaca");
     }
 
-    // PENOLAKAN HTTP DARI MIDTRANS
-    if (!midtransResponse.ok) {
-      console.error("MIDTRANS_CREATE_ERROR:", {
-        httpStatus: midtransResponse.status,
+    // PENOLAKAN MIDTRANS
+    if (!snapResponse.ok) {
+      console.error("MIDTRANS_SNAP_ERROR:", {
+        httpStatus: snapResponse.status,
         response: payment
       });
+
+      // Respons 5xx bisa bersifat ambigu.
+      if (snapResponse.status >= 500) {
+        return res.status(502).json({
+          success: false,
+          uncertain: true,
+          message:
+            "Midtrans mengalami gangguan. Jangan membuat tagihan baru sebelum status diperiksa.",
+          order_id: cleanOrderId
+        });
+      }
 
       await releaseLock();
 
       return res.status(400).json({
         success: false,
         message:
+          payment?.error_messages?.join(", ") ||
           payment?.status_message ||
-          payment?.error ||
           "Midtrans menolak pembuatan pembayaran"
       });
     }
 
-    // VALIDASI RESPONS MIDTRANS
-    const qrAction = Array.isArray(payment.actions)
-      ? payment.actions.find(
-          action =>
-            action.name === "generate-qr-code" &&
-            typeof action.url === "string" &&
-            action.url.startsWith("https://")
-        )
-      : null;
+    // VALIDASI TOKEN DAN URL CHECKOUT
+    let redirectUrl = null;
 
-    const validPayment =
-      payment &&
-      ["200", "201"].includes(String(payment.status_code)) &&
-      payment.order_id === order.order_id &&
-      typeof payment.transaction_id === "string" &&
-      payment.transaction_id.length > 0 &&
-      qrAction;
+    try {
+      const parsedUrl = new URL(payment.redirect_url);
 
-    if (!validPayment) {
-      console.error("MIDTRANS_INVALID_SUCCESS_RESPONSE:", {
+      const allowedHost =
+        mode === "production"
+          ? "app.midtrans.com"
+          : "app.sandbox.midtrans.com";
+
+      if (
+        parsedUrl.protocol === "https:" &&
+        parsedUrl.hostname === allowedHost &&
+        parsedUrl.pathname.startsWith("/snap/v2/vtweb/")
+      ) {
+        redirectUrl = parsedUrl.toString();
+      }
+    } catch {
+      redirectUrl = null;
+    }
+
+    if (
+      snapResponse.status !== 201 ||
+      typeof payment.token !== "string" ||
+      !payment.token ||
+      !redirectUrl
+    ) {
+      console.error("MIDTRANS_SNAP_INVALID_RESPONSE:", {
         orderId: cleanOrderId,
-        statusCode: payment?.status_code,
-        hasTransactionId: Boolean(payment?.transaction_id),
-        hasQrAction: Boolean(qrAction)
+        httpStatus: snapResponse.status,
+        hasToken: Boolean(payment?.token),
+        hasRedirectUrl: Boolean(payment?.redirect_url)
       });
 
       return res.status(502).json({
         success: false,
         uncertain: true,
         message:
-          "Respons pembayaran belum lengkap. Jangan membuat pembayaran baru sebelum status Midtrans diperiksa.",
+          "Respons pembayaran Midtrans belum lengkap. Jangan membuat tagihan baru sebelum diperiksa.",
         order_id: cleanOrderId
       });
     }
 
-    // SIMPAN STATUS PEMBAYARAN
-    // URL QRIS tidak disimpan sebagai payment_url.
-    // Frontend menggunakan payment.actions untuk menampilkan QRIS.
+    // SIMPAN URL CHECKOUT
     const updateResponse = await fetch(
       `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating&payment_status=eq.pending`,
       {
@@ -413,7 +480,7 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           payment_creation_status: "created",
-          payment_url: null
+          payment_url: redirectUrl
         }),
         signal: controller.signal
       }
@@ -429,14 +496,17 @@ export default async function handler(req, res) {
         success: false,
         uncertain: true,
         message:
-          "Pembayaran mungkin sudah dibuat Midtrans, tetapi penyimpanan status internal gagal. Perlu pemeriksaan sebelum mencoba lagi.",
+          "Checkout Midtrans mungkin sudah dibuat, tetapi penyimpanan status internal gagal.",
         order_id: cleanOrderId
       });
     }
 
     const updatedOrders = await updateResponse.json();
 
-    if (!Array.isArray(updatedOrders) || updatedOrders.length !== 1) {
+    if (
+      !Array.isArray(updatedOrders) ||
+      updatedOrders.length !== 1
+    ) {
       console.error(
         "PAYMENT_STATUS_SAVE_UNVERIFIED:",
         cleanOrderId
@@ -446,7 +516,7 @@ export default async function handler(req, res) {
         success: false,
         uncertain: true,
         message:
-          "Pembayaran mungkin sudah dibuat Midtrans, tetapi status pesanan belum berhasil diverifikasi.",
+          "Checkout mungkin sudah dibuat, tetapi status pesanan belum berhasil diverifikasi.",
         order_id: cleanOrderId
       });
     }
@@ -456,9 +526,13 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       mode,
-      message: "Pembayaran QRIS berhasil dibuat",
+      message: "Checkout Midtrans berhasil dibuat",
       order_id: cleanOrderId,
-      payment
+      payment: {
+        token: payment.token,
+        redirect_url: redirectUrl,
+        payment_url: redirectUrl
+      }
     });
 
   } catch (error) {
@@ -472,7 +546,7 @@ export default async function handler(req, res) {
         success: false,
         uncertain: midtransRequestStarted,
         message: midtransRequestStarted
-          ? "Respons pembayaran timeout. Jangan membuat pembayaran baru sebelum status Midtrans diperiksa."
+          ? "Respons Midtrans timeout. Jangan membuat tagihan baru sebelum status diperiksa."
           : "Permintaan timeout sebelum hasil pembayaran dapat dipastikan.",
         order_id: cleanOrderId
       });
@@ -482,7 +556,7 @@ export default async function handler(req, res) {
       success: false,
       uncertain: lockClaimed,
       message: lockClaimed
-        ? "Proses pembayaran belum dapat dipastikan. Pengunci dipertahankan demi mencegah tagihan ganda."
+        ? "Proses pembayaran belum dapat dipastikan. Pengunci dipertahankan untuk mencegah tagihan ganda."
         : "Terjadi kesalahan saat membuat pembayaran",
       order_id: cleanOrderId
     });
@@ -491,4 +565,4 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
-      
+        
