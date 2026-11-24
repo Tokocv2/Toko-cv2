@@ -6,6 +6,7 @@ let refreshPromise = null;
 
 const CACHE_DURATION = 5 * 60 * 1000;
 const MAX_STALE_CACHE_AGE = 30 * 60 * 1000;
+const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
 
 function getDigiflazzError(data, statusCode) {
   const message =
@@ -49,24 +50,41 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
           }
         },
         (response) => {
-          let result = "";
+          const chunks = [];
+          let totalBytes = 0;
           let settled = false;
 
-          response.setEncoding("utf8");
-
           response.on("data", (chunk) => {
-            result += chunk;
+            if (settled) return;
 
-            if (result.length > 5 * 1024 * 1024) {
-              response.destroy(
-                new Error("Respons Digiflazz terlalu besar")
+            const buffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+
+            totalBytes += buffer.byteLength;
+
+            if (totalBytes > MAX_RESPONSE_SIZE) {
+              settled = true;
+              response.destroy();
+
+              reject(
+                new Error("Respons Digiflazz melebihi batas 5 MB")
               );
+
+              return;
             }
+
+            chunks.push(buffer);
           });
 
           response.on("end", () => {
             if (settled) return;
             settled = true;
+
+            const result = Buffer.concat(
+              chunks,
+              totalBytes
+            ).toString("utf8");
 
             try {
               resolve({
@@ -290,7 +308,6 @@ export default async function handler(req, res) {
       }
 
       const freshProducts = await refreshPromise;
-
       return res.status(200).json(freshProducts);
     } catch (error) {
       console.error(
