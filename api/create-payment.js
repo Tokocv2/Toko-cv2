@@ -10,8 +10,6 @@ export default async function handler(req, res) {
   const mode = String(MIDTRANS_MODE).trim().toLowerCase();
   const midtransServerKey = String(MIDTRANS_SERVER_KEY || "").trim();
 
-  // Endpoint ini hanya menerima POST.
-  // Diagnostik autentikasi publik dinonaktifkan.
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
 
@@ -92,8 +90,6 @@ export default async function handler(req, res) {
   let lockClaimed = false;
   let midtransRequestStarted = false;
 
-  // Melepas pengunci memakai timeout independen.
-  // Tidak menggunakan AbortSignal request utama.
   async function releaseLock() {
     const releaseController = new AbortController();
     const releaseTimer = setTimeout(
@@ -194,8 +190,6 @@ export default async function handler(req, res) {
       limit: "1"
     });
 
-    // Pesanan login hanya dapat diakses pemiliknya.
-    // Checkout tamu hanya mencari pesanan tanpa user_id.
     if (user) {
       params.set("user_id", `eq.${user.id}`);
     } else {
@@ -306,7 +300,6 @@ export default async function handler(req, res) {
     lockClaimed = true;
 
     // MIDTRANS QRIS
-    // Tetap menggunakan QRIS sesuai alur frontend saat ini.
     const midtransUrl =
       mode === "production"
         ? "https://api.midtrans.com/v2/charge"
@@ -351,11 +344,10 @@ export default async function handler(req, res) {
     try {
       payment = await midtransResponse.json();
     } catch {
-      // Respons tidak terbaca: jangan melepas pengunci.
       throw new Error("Respons Midtrans tidak dapat dibaca");
     }
 
-    // Penolakan HTTP yang jelas dari Midtrans.
+    // PENOLAKAN HTTP DARI MIDTRANS
     if (!midtransResponse.ok) {
       console.error("MIDTRANS_CREATE_ERROR:", {
         httpStatus: midtransResponse.status,
@@ -367,8 +359,8 @@ export default async function handler(req, res) {
       return res.status(400).json({
         success: false,
         message:
-          payment.status_message ||
-          payment.error ||
+          payment?.status_message ||
+          payment?.error ||
           "Midtrans menolak pembuatan pembayaran"
       });
     }
@@ -383,8 +375,6 @@ export default async function handler(req, res) {
         )
       : null;
 
-    // Midtrans dapat mengembalikan status_code 200 atau 201.
-    // Keduanya diterima jika seluruh data transaksi valid.
     const validPayment =
       payment &&
       ["200", "201"].includes(String(payment.status_code)) &&
@@ -401,8 +391,6 @@ export default async function handler(req, res) {
         hasQrAction: Boolean(qrAction)
       });
 
-      // Midtrans mungkin sudah membuat transaksi.
-      // Pengunci sengaja dipertahankan.
       return res.status(502).json({
         success: false,
         uncertain: true,
@@ -412,7 +400,9 @@ export default async function handler(req, res) {
       });
     }
 
-    // SIMPAN STATUS PEMBAYARAN DAN URL QR
+    // SIMPAN STATUS PEMBAYARAN
+    // URL QRIS tidak disimpan sebagai payment_url.
+    // Frontend menggunakan payment.actions untuk menampilkan QRIS.
     const updateResponse = await fetch(
       `${supabaseUrl}/rest/v1/orders?order_id=eq.${encodeURIComponent(cleanOrderId)}&payment_creation_status=eq.creating&payment_status=eq.pending`,
       {
@@ -423,7 +413,7 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           payment_creation_status: "created",
-          payment_url: qrAction.url
+          payment_url: null
         }),
         signal: controller.signal
       }
@@ -435,7 +425,6 @@ export default async function handler(req, res) {
         await updateResponse.text()
       );
 
-      // Jangan melepas pengunci karena Midtrans sudah membuat tagihan.
       return res.status(502).json({
         success: false,
         uncertain: true,
@@ -501,5 +490,5 @@ export default async function handler(req, res) {
   } finally {
     clearTimeout(timer);
   }
-    }
-  
+                                        }
+      
