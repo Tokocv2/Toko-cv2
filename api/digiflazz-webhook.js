@@ -1,3 +1,4 @@
+
 import crypto from "node:crypto";
 
 export const config = {
@@ -41,28 +42,34 @@ export default async function handler(req, res) {
 
     const chunks = [];
     let totalSize = 0;
+    let tooLarge = false;
 
     for await (const chunk of req) {
       const buffer = Buffer.isBuffer(chunk)
         ? chunk
         : Buffer.from(chunk);
 
+      if (tooLarge) continue;
+
       totalSize += buffer.length;
 
       if (totalSize > MAX_BODY_SIZE) {
-        req.destroy();
-
-        return res.status(413).json({
-          success: false,
-          message: "Ukuran request terlalu besar"
-        });
+        tooLarge = true;
+        chunks.length = 0;
+        continue;
       }
 
       chunks.push(buffer);
     }
 
-    const rawBody = Buffer.concat(chunks, totalSize);
+    if (tooLarge) {
+      return res.status(413).json({
+        success: false,
+        message: "Ukuran request terlalu besar"
+      });
+    }
 
+    const rawBody = Buffer.concat(chunks, totalSize);
     let payload;
 
     try {
@@ -100,7 +107,6 @@ export default async function handler(req, res) {
 
     // Verifikasi signature transaksi
     const signature = req.headers["x-hub-signature"] || "";
-
     const expected =
       "sha1=" +
       crypto
@@ -204,4 +210,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
