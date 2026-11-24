@@ -4,6 +4,9 @@ import https from "node:https";
 
 let refreshPromise = null;
 
+const CACHE_DURATION = 5 * 60 * 1000;
+const MAX_STALE_CACHE_AGE = 30 * 60 * 1000;
+
 function getDigiflazzError(data, statusCode) {
   const message =
     data?.message ||
@@ -52,8 +55,6 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
           response.setEncoding("utf8");
 
           response.on("data", (chunk) => {
-            if (settled) return;
-
             result += chunk;
 
             if (result.length > 5 * 1024 * 1024) {
@@ -156,8 +157,7 @@ async function fetchFreshProducts({
         cache_key: cacheKey,
         response: data,
         updated_at: new Date().toISOString()
-      }),
-      signal: AbortSignal.timeout(15000)
+      })
     }
   );
 
@@ -209,7 +209,6 @@ export default async function handler(req, res) {
 
     const baseUrl = supabaseUrl.replace(/\/+$/, "");
     const cacheKey = "digiflazz_prepaid";
-    const cacheDuration = 5 * 60 * 1000;
 
     let cachedProduct = null;
     let cacheTime = 0;
@@ -222,8 +221,7 @@ export default async function handler(req, res) {
           headers: {
             apikey: supabaseKey,
             Authorization: `Bearer ${supabaseKey}`
-          },
-          signal: AbortSignal.timeout(15000)
+          }
         }
       );
 
@@ -253,20 +251,30 @@ export default async function handler(req, res) {
       );
     }
 
-    // GUNAKAN CACHE JIKA MASIH SEGAR
+    // HITUNG USIA CACHE
     const cacheAge = Date.now() - cacheTime;
+
+    const validCacheTime =
+      Number.isFinite(cacheTime) &&
+      cacheTime > 0 &&
+      cacheAge >= 0;
 
     const cacheIsFresh =
       cachedProduct &&
-      Number.isFinite(cacheTime) &&
-      cacheAge >= 0 &&
-      cacheAge < cacheDuration;
+      validCacheTime &&
+      cacheAge < CACHE_DURATION;
 
+    const cacheIsUsableAsFallback =
+      cachedProduct &&
+      validCacheTime &&
+      cacheAge <= MAX_STALE_CACHE_AGE;
+
+    // GUNAKAN CACHE SEGAR
     if (cacheIsFresh) {
       return res.status(200).json(cachedProduct);
     }
 
-    // CEGAH REFRESH BERSAMAAN PADA INSTANCE YANG SAMA
+    // REFRESH PRODUK DARI DIGIFLAZZ
     try {
       if (!refreshPromise) {
         refreshPromise = fetchFreshProducts({
@@ -290,7 +298,22 @@ export default async function handler(req, res) {
         error.message
       );
 
-      // TIDAK MENGGUNAKAN CACHE KEDALUWARSA
+      // CACHE LAMA HANYA BOLEH DIPAKAI MAKSIMAL 30 MENIT
+      if (
+        cacheIsUsableAsFallback &&
+        Array.isArray(cachedProduct.data)
+      ) {
+        console.warn(
+          "PRODUCTS_CACHE_FALLBACK: Menggunakan cache lama yang masih dalam batas usia"
+        );
+
+        return res.status(200).json(cachedProduct);
+      }
+
+      console.error(
+        "PRODUCTS_CACHE_REJECTED: Cache sudah kedaluwarsa atau waktu cache tidak valid"
+      );
+
       return res.status(503).json({
         success: false,
         message:
