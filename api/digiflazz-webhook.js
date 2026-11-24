@@ -34,15 +34,17 @@ export default async function handler(req, res) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SECRET_KEY;
 
-    if (!secret) {
+    if (!secret || !supabaseUrl || !supabaseKey) {
       return res.status(500).json({
         success: false,
-        message: "Webhook secret belum tersedia"
+        message: "Environment Variables belum lengkap"
       });
     }
 
-    // BACA RAW BODY DENGAN BATAS UKURAN
-    const contentLength = Number(req.headers["content-length"] || 0);
+    // BACA RAW BODY
+    const contentLength = Number(
+      req.headers["content-length"] || 0
+    );
 
     if (
       Number.isFinite(contentLength) &&
@@ -126,7 +128,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // VERIFIKASI SIGNATURE HMAC-SHA1
+    // VERIFIKASI HMAC-SHA1
     const signature = req.headers["x-hub-signature"];
 
     if (
@@ -170,7 +172,9 @@ export default async function handler(req, res) {
     const orderId = data.ref_id;
     const customerNo = data.customer_no;
     const buyerSku = data.buyer_sku_code;
-    const status = String(data.status || "").trim().toLowerCase();
+    const status = String(data.status || "")
+      .trim()
+      .toLowerCase();
 
     if (
       typeof orderId !== "string" ||
@@ -187,11 +191,13 @@ export default async function handler(req, res) {
     }
 
     const cleanOrderId = orderId.trim();
+    const cleanCustomerNo = customerNo.trim();
+    const cleanSku = buyerSku.trim();
 
     if (
       cleanOrderId.length > 100 ||
-      customerNo.length > 200 ||
-      buyerSku.length > 200
+      cleanCustomerNo.length > 200 ||
+      cleanSku.length > 200
     ) {
       return res.status(400).json({
         success: false,
@@ -199,16 +205,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // STATUS NON-FINAL TIDAK MENGUBAH DATABASE
-    let topupStatus = null;
+    // STATUS FINAL DIGIFLAZZ
+    let topupStatus;
 
     if (status === "sukses") {
       topupStatus = "success";
     } else if (status === "gagal") {
       topupStatus = "failed";
-    }
-
-    if (!topupStatus) {
+    } else {
       return res.status(200).json({
         success: true,
         message: "Status transaksi belum final",
@@ -216,17 +220,11 @@ export default async function handler(req, res) {
       });
     }
 
-    if (!supabaseUrl || !supabaseKey) {
-      return res.status(500).json({
-        success: false,
-        message: "Konfigurasi Supabase belum lengkap"
-      });
-    }
-
     const baseUrl =
       `${supabaseUrl.replace(/\/+$/, "")}/rest/v1/orders`;
 
-    const encodedOrderId = encodeURIComponent(cleanOrderId);
+    const encodedOrderId =
+      encodeURIComponent(cleanOrderId);
 
     const headers = {
       apikey: supabaseKey,
@@ -234,15 +232,15 @@ export default async function handler(req, res) {
       "Content-Type": "application/json"
     };
 
-    // UPDATE HANYA JIKA:
-    // 1. Pesanan sudah dibayar.
-    // 2. Identitas produk cocok.
-    // 3. Nomor pelanggan cocok.
-    // 4. Status top-up belum final.
+    // UPDATE ATOMIK:
+    // - Pembayaran harus sudah paid.
+    // - SKU dan nomor pelanggan harus cocok.
+    // - Status lama harus pending, processing, atau retrying.
+    // - Status final tidak dapat ditimpa.
     const updateUrl =
       `${baseUrl}?order_id=eq.${encodedOrderId}` +
-      `&sku=eq.${encodeURIComponent(buyerSku.trim())}` +
-      `&customer_no=eq.${encodeURIComponent(customerNo.trim())}` +
+      `&sku=eq.${encodeURIComponent(cleanSku)}` +
+      `&customer_no=eq.${encodeURIComponent(cleanCustomerNo)}` +
       "&payment_status=eq.paid" +
       "&topup_status=in.(processing,pending,retrying)" +
       "&select=order_id,topup_status";
@@ -265,13 +263,17 @@ export default async function handler(req, res) {
         await response.text()
       );
 
-      throw new Error("Gagal memperbarui status pesanan");
+      throw new Error(
+        "Gagal memperbarui status pesanan"
+      );
     }
 
     const updatedRows = await response.json();
 
     if (!Array.isArray(updatedRows)) {
-      throw new Error("Respons Supabase tidak valid");
+      throw new Error(
+        "Respons Supabase tidak valid"
+      );
     }
 
     console.log("DIGIFLAZZ_WEBHOOK_UPDATE:", {
@@ -280,12 +282,11 @@ export default async function handler(req, res) {
       updatedRows: updatedRows.length
     });
 
-    // CALLBACK DUPLIKAT TIDAK MENGUBAH STATUS FINAL.
     return res.status(200).json({
       success: true,
       message: updatedRows.length
         ? "Status top-up berhasil diperbarui"
-        : "Pesanan tidak perlu diperbarui atau identitas tidak cocok",
+        : "Pesanan tidak perlu diperbarui atau status sudah final",
       order_id: cleanOrderId,
       topup_status: topupStatus,
       updated_rows: updatedRows.length
