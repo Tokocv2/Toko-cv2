@@ -5,7 +5,6 @@ const sendDigiflazz = require("../lib/digiflazz");
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-
     return res.status(405).json({
       success: false,
       message: "Method not allowed"
@@ -33,7 +32,6 @@ module.exports = async (req, res) => {
         "MIDTRANS_NOTIFICATION_MISSING_ENV:",
         missing.join(", ")
       );
-
       throw new Error("Environment variable belum lengkap");
     }
 
@@ -132,7 +130,6 @@ module.exports = async (req, res) => {
       }
 
       const orders = await response.json();
-
       return orders[0] || null;
     }
 
@@ -236,8 +233,6 @@ module.exports = async (req, res) => {
     }
 
     // PEMBAYARAN BERHASIL
-    // Status expired/failed tidak otomatis diaktifkan kembali.
-    // Pembayaran terlambat harus diperiksa secara manual.
     if (
       order.payment_status === "expired" ||
       order.payment_status === "failed"
@@ -305,8 +300,24 @@ module.exports = async (req, res) => {
       }
     }
 
-    // KLAIM ATOMIK TOP-UP
-    // Hanya satu callback yang dapat mengubah pending menjadi processing.
+    // PERLINDUNGAN SANDBOX
+    // Jangan pernah mengirim pembelian sungguhan ke Digiflazz.
+    if (mode === "sandbox") {
+      console.log(
+        "MIDTRANS_SANDBOX_PAYMENT_CONFIRMED:",
+        cleanOrderId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Pembayaran Sandbox berhasil dicatat. Digiflazz tidak dipanggil.",
+        order_id: cleanOrderId,
+        payment_status: "paid",
+        topup_status: order.topup_status
+      });
+    }
+
+    // KLAIM ATOMIK TOP-UP PRODUCTION
     const claimResponse = await fetch(
       `${baseUrl}?order_id=eq.${encodedOrderId}` +
       "&payment_status=eq.paid" +
@@ -357,8 +368,6 @@ module.exports = async (req, res) => {
         error.message
       );
 
-      // Jangan kirim ulang otomatis.
-      // Transaksi mungkin sudah diterima Digiflazz.
       return res.status(200).json({
         success: true,
         message: "Hasil pengiriman belum dapat dipastikan. Perlu pemeriksaan.",
