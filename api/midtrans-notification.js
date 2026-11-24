@@ -16,14 +16,14 @@ module.exports = async (req, res) => {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
     MIDTRANS_MODE = "sandbox",
-    MIDTRANS_SERVER_KEY
+    MIDTRANS_SIGNATURE_KEY
   } = process.env;
 
   try {
     if (
       !SUPABASE_URL ||
       !SUPABASE_SECRET_KEY ||
-      !MIDTRANS_SERVER_KEY
+      !MIDTRANS_SIGNATURE_KEY
     ) {
       throw new Error("Environment variable belum lengkap");
     }
@@ -73,13 +73,14 @@ module.exports = async (req, res) => {
     }
 
     // VERIFIKASI SIGNATURE MIDTRANS
+    // Menggunakan Signature Secret Key, bukan Server Key.
     const expectedSignature = crypto
       .createHash("sha512")
       .update(
         cleanOrderId +
         status_code +
         gross_amount +
-        MIDTRANS_SERVER_KEY
+        MIDTRANS_SIGNATURE_KEY
       )
       .digest("hex");
 
@@ -419,3 +420,4 @@ module.exports = async (req, res) => {
     });
   }
 };
+  
