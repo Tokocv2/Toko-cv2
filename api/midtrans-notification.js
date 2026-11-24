@@ -15,15 +15,18 @@ module.exports = async (req, res) => {
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
     MIDTRANS_MODE = "sandbox",
-    MIDTRANS_SERVER_KEY
+    MIDTRANS_SIGNATURE_KEY
   } = process.env;
 
   try {
+    // VALIDASI ENVIRONMENT VARIABLES
     const missing = [];
 
     if (!SUPABASE_URL) missing.push("SUPABASE_URL");
     if (!SUPABASE_SECRET_KEY) missing.push("SUPABASE_SECRET_KEY");
-    if (!MIDTRANS_SERVER_KEY) missing.push("MIDTRANS_SERVER_KEY");
+    if (!MIDTRANS_SIGNATURE_KEY) {
+      missing.push("MIDTRANS_SIGNATURE_KEY");
+    }
 
     if (missing.length) {
       console.error(
@@ -40,6 +43,7 @@ module.exports = async (req, res) => {
       throw new Error("MIDTRANS_MODE tidak valid");
     }
 
+    // AMBIL DATA NOTIFIKASI
     const {
       order_id,
       status_code,
@@ -52,10 +56,8 @@ module.exports = async (req, res) => {
     if (
       typeof order_id !== "string" ||
       !order_id.trim() ||
-      typeof status_code !== "string" ||
-      !status_code.trim() ||
-      typeof gross_amount !== "string" ||
-      !gross_amount.trim() ||
+      !["string", "number"].includes(typeof status_code) ||
+      !["string", "number"].includes(typeof gross_amount) ||
       typeof signature_key !== "string" ||
       typeof transaction_status !== "string"
     ) {
@@ -66,25 +68,30 @@ module.exports = async (req, res) => {
     }
 
     const cleanOrderId = order_id.trim();
+    const cleanStatusCode = String(status_code).trim();
+    const cleanGrossAmount = String(gross_amount).trim();
 
     if (
       cleanOrderId.length > 100 ||
+      !cleanStatusCode ||
+      !cleanGrossAmount ||
       !/^[a-f0-9]{128}$/i.test(signature_key)
     ) {
-      return res.status(401).json({
+      return res.status(400).json({
         success: false,
         message: "Data atau signature tidak valid"
       });
     }
 
     // VERIFIKASI SIGNATURE MIDTRANS
+    // Menggunakan Signature Secret Key, bukan Server Key.
     const expectedSignature = crypto
       .createHash("sha512")
       .update(
         cleanOrderId +
-        status_code +
-        gross_amount +
-        MIDTRANS_SERVER_KEY
+        cleanStatusCode +
+        cleanGrossAmount +
+        MIDTRANS_SIGNATURE_KEY
       )
       .digest("hex");
 
@@ -106,6 +113,7 @@ module.exports = async (req, res) => {
       });
     }
 
+    // KONEKSI SUPABASE
     const headers = {
       apikey: SUPABASE_SECRET_KEY,
       Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
@@ -134,6 +142,7 @@ module.exports = async (req, res) => {
       }
 
       const orders = await response.json();
+
       return orders[0] || null;
     }
 
@@ -146,8 +155,8 @@ module.exports = async (req, res) => {
       });
     }
 
-    // VALIDASI NOMINAL
-    const notificationAmount = Number(gross_amount);
+    // VALIDASI NOMINAL PEMBAYARAN
+    const notificationAmount = Number(cleanGrossAmount);
     const orderAmount = Number(order.selling_price);
 
     if (
@@ -172,10 +181,13 @@ module.exports = async (req, res) => {
     const status = transaction_status.trim().toLowerCase();
 
     const paid =
-      status === "settlement" ||
+      cleanStatusCode === "200" &&
       (
-        status === "capture" &&
-        String(fraud_status || "").toLowerCase() === "accept"
+        status === "settlement" ||
+        (
+          status === "capture" &&
+          String(fraud_status || "").toLowerCase() === "accept"
+        )
       );
 
     let paymentStatus = "pending";
@@ -230,7 +242,9 @@ module.exports = async (req, res) => {
         );
 
         if (!update.ok) {
-          throw new Error("Gagal memperbarui status pembayaran");
+          throw new Error(
+            "Gagal memperbarui status pembayaran"
+          );
         }
       }
 
@@ -290,7 +304,9 @@ module.exports = async (req, res) => {
       );
 
       if (!paymentUpdate.ok) {
-        throw new Error("Gagal memperbarui status pembayaran");
+        throw new Error(
+          "Gagal memperbarui status pembayaran"
+        );
       }
 
       const updatedPayment = await paymentUpdate.json();
@@ -432,6 +448,7 @@ module.exports = async (req, res) => {
       });
     }
 
+    // TENTUKAN STATUS TOP-UP
     const digiflazzStatus = String(
       result.status || ""
     ).trim().toLowerCase();
