@@ -52,6 +52,8 @@ async function sendDigiflazzRequest(proxyUrl, payload) {
           response.setEncoding("utf8");
 
           response.on("data", (chunk) => {
+            if (settled) return;
+
             result += chunk;
 
             if (result.length > 5 * 1024 * 1024) {
@@ -154,7 +156,8 @@ async function fetchFreshProducts({
         cache_key: cacheKey,
         response: data,
         updated_at: new Date().toISOString()
-      })
+      }),
+      signal: AbortSignal.timeout(15000)
     }
   );
 
@@ -219,7 +222,8 @@ export default async function handler(req, res) {
           headers: {
             apikey: supabaseKey,
             Authorization: `Bearer ${supabaseKey}`
-          }
+          },
+          signal: AbortSignal.timeout(15000)
         }
       );
 
@@ -249,7 +253,7 @@ export default async function handler(req, res) {
       );
     }
 
-    // GUNAKAN CACHE SEGAR
+    // GUNAKAN CACHE JIKA MASIH SEGAR
     const cacheAge = Date.now() - cacheTime;
 
     const cacheIsFresh =
@@ -286,18 +290,7 @@ export default async function handler(req, res) {
         error.message
       );
 
-      // GUNAKAN CACHE LAMA JIKA DIGIFLAZZ GAGAL
-      if (
-        cachedProduct &&
-        Array.isArray(cachedProduct.data)
-      ) {
-        console.warn(
-          "PRODUCTS_CACHE_FALLBACK: Menggunakan cache lama"
-        );
-
-        return res.status(200).json(cachedProduct);
-      }
-
+      // TIDAK MENGGUNAKAN CACHE KEDALUWARSA
       return res.status(503).json({
         success: false,
         message:
@@ -315,4 +308,4 @@ export default async function handler(req, res) {
       message: "Terjadi kesalahan pada server"
     });
   }
-      }
+}
