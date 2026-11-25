@@ -2610,8 +2610,9 @@ const pulsaOperators = [
 const digitalCategoryRules = {
   'Pulsa': ['pulsa', 'telkomsel', 'indosat', 'im3', 'xl', 'axis', 'tri', 'three', 'smartfren', 'by.u', 'byu', 'live.on', 'liveon'],
   'Paket Data': ['paket data', 'data', 'internet', 'kuota', 'telkomsel', 'indosat', 'im3', 'xl', 'axis', 'tri', 'three', 'smartfren', 'by.u', 'byu', 'live.on', 'liveon'],
-  // Daftar kategori luas untuk pencarian SKU game; hanya SKU aktif yang dirender.
-  'Voucher Game': ['steam', 'steam wallet', 'google play', 'googleplay', 'itunes', 'garena shell', 'roblox', 'robux', 'psn', 'playstation', 'binance', 'xbox', 'minecraft', 'minecoin', 'mobile legends', 'mobilelegend', 'mlbb', 'free fire', 'freefire', 'pubg', 'call of duty', 'codm', 'genshin', 'honkai', 'delta force', 'honor of kings', 'valorant', 'league of legends', 'point blank', 'arena breakout', 'blood strike', 'stumble guys', 'clash of clans', 'clash royale', 'pokemon unite', 'apex legends', 'dota 2', 'identity v', 'wuthering waves', 'zenless zone zero', 'ragnarok x', 'lords mobile', 'lifeafter', 'super sus', 'efootball', 'fc mobile'],
+  // Voucher Game dipilah ketat melalui penanda voucher/gift card/redeem,
+  // bukan sekadar nama game. SKU top-up token seperti Diamond FF tetap di menu Game.
+  'Voucher Game': ['voucher', 'gift card', 'giftcard', 'redeem', 'garena shell', 'steam wallet', 'google play', 'googleplay', 'itunes', 'robux', 'psn', 'playstation', 'binance', 'xbox', 'minecoin'],
   'Token Listrik': ['token listrik', 'pln', 'listrik'],
   'E-Wallet': ['dana', 'ovo', 'gopay', 'go pay', 'shopeepay', 'shopee pay', 'linkaja', 'link aja', 'maxim', 'e-money', 'emoney', 'brizzi', 'tapcash', 'tap cash', 'mandiri e-money', 'mandiri emoney', 'isaku', 'i.saku', 'sakuku', 'astrapay', 'astra pay', 'jenius'],
   'Voucher Streaming': ['netflix', 'vidio', 'vision+', 'vision plus', 'dramabox', 'drama box', 'folaplay', 'fola play', 'spotify', 'disney', 'viu', 'youtube premium', 'wetv', 'we tv', 'iqiyi', 'iQIYI', 'prime video', 'genflix', 'mola']
@@ -2755,6 +2756,47 @@ function digitalProductHaystack(product) {
     .filter(Boolean).join(' ').toLowerCase();
 }
 
+// Pemisah kategori utama katalog digital. Nama game saja tidak cukup untuk
+// memasukkan SKU ke Voucher Game; harus ada penanda voucher yang jelas.
+function digitalProductMatchesCategory(product, category) {
+  const name = String(product.product_name || '').toLowerCase();
+  const sourceCategory = String(product.category || '').toLowerCase();
+  const brand = String(product.brand || '').toLowerCase();
+  const type = String(product.type || '').toLowerCase();
+  const all = [name, sourceCategory, brand, type].join(' ');
+  const compact = normalizeText(all);
+
+  if (category === 'Voucher Game') {
+    const hasVoucherMarker = /\b(voucher|gift\s*card|redeem|activation\s*code|product\s*key|garena\s*shell)\b/i.test(all) ||
+      /giftcard|steamwallet|googleplay|itunes|psn/.test(compact);
+    if (!hasVoucherMarker) return false;
+    // Tetap izinkan voucher diamond bila memang tertulis sebagai voucher.
+    return true;
+  }
+
+  if (category === 'Pulsa') {
+    return /\bpulsa\b/i.test(all) && !/paket\s*data|kuota|internet/.test(all);
+  }
+  if (category === 'Paket Data') {
+    return /paket\s*data|\bkuota\b|\binternet\b|\bdata\b/i.test(all) &&
+      !/\bpulsa\b/i.test(name);
+  }
+  if (category === 'Token Listrik') {
+    return /token\s*listrik|\bpln\b|\blistrik\b/i.test(all);
+  }
+  if (category === 'E-Wallet') {
+    return /e.?wallet|emoney|e-money|dana|ovo|gopay|go pay|shopeepay|shopee pay|linkaja|link aja|brizzi|tapcash|tap cash|isaku|sakuku|astrapay|astra pay|jenius|maxim/i.test(all);
+  }
+  if (category === 'Voucher Streaming') {
+    const streamingBrand = /netflix|vidio|vision\+?|dramabox|folaplay|spotify|disney|\bviu\b|youtube premium|wetv|we tv|iqiyi|prime video|genflix|mola/i.test(all);
+    const subscriptionMarker = /voucher|premium|subscription|berlangganan|paket|\b1\s*(hari|day|bulan|month|minggu|week)|\b[0-9]+\s*(hari|day|bulan|month|minggu|week)/i.test(all);
+    return streamingBrand && subscriptionMarker;
+  }
+
+  const rules = digitalCategoryRules[category] || [];
+  return rules.some(term => compact.includes(normalizeText(term)));
+}
+
 function updateDigitalProductOptions() {
   const container = document.getElementById('productCategories');
   const select = document.getElementById('productSelect');
@@ -2762,11 +2804,9 @@ function updateDigitalProductOptions() {
   select.value = '';
   select.innerHTML = '';
   container.innerHTML = '';
-  const rules = digitalCategoryRules[activeDigitalCategory] || [];
-  const matched = digiflazzProducts.map((product,index)=>({product,index})).filter(({product})=>{
-    const haystack = digitalProductHaystack(product);
-    return rules.some(term=>haystack.includes(term.toLowerCase()));
-  });
+  const matched = digiflazzProducts.map((product,index)=>({product,index})).filter(({product})=>
+    digitalProductMatchesCategory(product, activeDigitalCategory)
+  );
 
   // Katalog Pulsa: pilihan operator ditampilkan hanya saat pelanggan memilih "Lihat Semua".
   if (activeDigitalCategory === 'Pulsa' && !activeDigitalBrand) {
