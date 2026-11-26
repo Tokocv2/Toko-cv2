@@ -2434,7 +2434,7 @@ html,body{background:#fff!important;color:var(--ink)!important;font-family:'Rajd
 <div class="game-meta game-meta-row"><span>⚡ Proses Instan</span><span id="topupViews">View : 0</span></div>
 <div class="game-rating" hidden="" id="topupRating">⭐ Rating Play Store</div>
 <p class="game-description" id="topupDescription">Top Up game dan beli paket dengan proses mudah dan cepat.</p>
-<button class="more-description" onclick="toggleGameDescription()" type="button">Selengkapnya...</button>
+<button class="more-description" onclick="toggleGameDescription()" type="button">Telusuri Selengkapnya</button>
 <p class="game-description-extra" hidden="" id="gameDescriptionExtra">Silakan pilih produk yang tersedia, masukkan data akun dengan benar, lalu lanjutkan pemesanan.</p>
 </div>
 </div>
@@ -2686,6 +2686,13 @@ function openDigitalCategory(category, brand = '') {
   document.getElementById('topupDescription').textContent = brand
     ? (digitalDescriptions[brand] || ('Pilih ' + brand + ' dari varian yang tersedia pada katalog. Periksa kembali nominal dan data tujuan sebelum checkout.'))
     : 'Pilih kategori produk digital. Daftar nominal yang muncul berasal dari SKU Digiflazz yang berstatus aktif dan dapat dipilih untuk checkout.';
+  const digitalExtra = document.getElementById('gameDescriptionExtra');
+  digitalExtra.textContent = brand ? getDigitalLongDescription(category, brand) : 'Pilih salah satu produk untuk melihat informasi lengkap, cara pemesanan, data tujuan, dan ketentuan produk.';
+  digitalExtra.style.whiteSpace = 'pre-line';
+  digitalExtra.hidden = true;
+  document.querySelector('.more-description').textContent = 'Telusuri Selengkapnya';
+  document.querySelector('.more-description').setAttribute('aria-expanded', 'false');
+  document.querySelector('.more-description').setAttribute('aria-controls', 'gameDescriptionExtra');
   document.getElementById('topupGameIcon').style.display = 'none';
   document.getElementById('topupRating').hidden = true;
   document.getElementById('digitalTargetSection').hidden = false;
@@ -2838,18 +2845,10 @@ function updateDigitalProductOptions() {
     const operator = pulsaOperators.find(item => item.name === activeDigitalBrand);
     if (operator) brandTerms = operator.terms;
   }
-
-  // Semua kartu produk digital harus tetap bisa membuka katalog SKU mereknya.
-  // Jika suatu merek belum memiliki alias khusus, gunakan nama merek sebagai
-  // pencocokan cadangan. Ini khusus alur digital; filter katalog game tidak diubah.
-  const normalizedBrandTerms = (brandTerms.length ? brandTerms : [activeDigitalBrand])
-    .map(term => normalizeText(term))
-    .filter(Boolean);
-
   const brandMatched = activeDigitalBrand
     ? matched.filter(({product}) => {
-        const haystack = normalizeText(digitalProductHaystack(product));
-        return normalizedBrandTerms.some(term => haystack.includes(term));
+        const haystack = digitalProductHaystack(product);
+        return brandTerms.some(term => haystack.includes(term.toLowerCase()));
       })
     : matched;
 
@@ -2940,6 +2939,13 @@ function choose(game) {
     isML
       ? 'Top Up Mobile Legends (ML) Diamonds dan Beli Weekly Pass Murah'
       : 'Top up ' + game + ' dengan proses mudah dan cepat.';
+  const gameExtra = document.getElementById('gameDescriptionExtra');
+  gameExtra.textContent = getGameLongDescription(game);
+  gameExtra.style.whiteSpace = 'pre-line';
+  gameExtra.hidden = true;
+  document.querySelector('.more-description').textContent = 'Telusuri Selengkapnya';
+  document.querySelector('.more-description').setAttribute('aria-expanded', 'false');
+  document.querySelector('.more-description').setAttribute('aria-controls', 'gameDescriptionExtra');
   document.getElementById('topupRating').hidden = true;
 
   document.querySelector('header').style.display = 'none';
@@ -2975,9 +2981,208 @@ function backToGames() {
   });
 }
 
+// Deskripsi produk yang ditampilkan setelah pelanggan menekan "Telusuri Selengkapnya".
+// Keterangan dibuat berdasarkan jenis produk; nominal, masa aktif, dan metode penyaluran
+// tetap mengikuti SKU aktif yang benar-benar tersedia dari penyedia.
+const TOKOCV2_DIGITAL_DETAILS = {
+  'Mobile Legends': 'Mobile Legends: Bang Bang — layanan top up Diamond untuk membeli skin, hero, Starlight, dan item dalam game.\nData yang diperlukan: User ID dan Zone ID akun MLBB.\nCara pesan: masukkan User ID serta Zone ID, pilih nominal Diamond atau paket yang tampil, periksa kembali data akun, lalu selesaikan pembayaran.\nCatatan: jenis paket dan bonus mengikuti varian aktif; pastikan region akun sesuai ketentuan produk.',
+  'Free Fire': 'Free Fire — layanan top up Diamond untuk membeli item, karakter, bundle, dan fitur dalam game.\nData yang diperlukan: Player ID / UID Free Fire.\nCara pesan: masukkan Player ID, pilih nominal Diamond atau paket yang tersedia, periksa data, lalu selesaikan pembayaran.\nCatatan: item, bonus, dan ketersediaan mengikuti SKU aktif dari penyedia.',
+  'PUBG Mobile': 'PUBG Mobile — layanan top up UC (Unknown Cash), mata uang dalam game untuk membeli Royale Pass, crate, outfit, dan item lainnya.\nData yang diperlukan: Character ID / Player ID PUBG Mobile.\nCara pesan: masukkan ID karakter, pilih nominal UC yang tersedia, periksa kembali ID, lalu bayar.\nCatatan: pastikan memilih produk untuk versi/region akun yang sesuai.',
+  'Call of Duty Mobile': 'Call of Duty: Mobile — layanan top up CP (COD Points), mata uang dalam game untuk membeli Battle Pass, draw, operator, dan item.\nData yang diperlukan: UID akun COD Mobile; bila varian meminta data tambahan, ikuti petunjuk pada form.\nCara pesan: masukkan data akun, pilih nominal CP aktif, periksa kembali, lalu selesaikan pembayaran.\nCatatan: ketersediaan CP mengikuti SKU dan region yang didukung.',
+  'Genshin Impact': 'Genshin Impact — layanan pembelian Genesis Crystal atau paket terkait yang tersedia pada katalog. Genesis Crystal dapat digunakan untuk memperoleh Primogem dan konten dalam game.\nData yang diperlukan: UID pemain dan server/region akun.\nCara pesan: masukkan UID dan pilih server dengan benar, pilih nominal/paket, periksa data, lalu bayar.\nCatatan: pastikan server sesuai karena pengiriman terikat pada akun dan server.',
+  'Honkai: Star Rail': 'Honkai: Star Rail — layanan top up Oneiric Shard atau paket dalam game yang tersedia.\nData yang diperlukan: UID pemain dan server/region bila diminta.\nCara pesan: masukkan UID, pilih server yang sesuai, pilih nominal/paket aktif, periksa kembali, lalu bayar.\nCatatan: jenis paket dan bonus mengikuti varian yang ditampilkan.',
+  'Delta Force': 'Delta Force — layanan top up mata uang atau item digital game sesuai varian yang tersedia pada katalog.\nData yang diperlukan: ID akun/karakter sesuai petunjuk produk.\nCara pesan: masukkan ID yang diminta, pilih nominal atau paket aktif, periksa kembali data, lalu selesaikan pembayaran.\nCatatan: pastikan platform dan server akun cocok dengan keterangan SKU.',
+  'Honor of Kings': 'Honor of Kings — layanan top up Token untuk membeli hero, skin, dan konten dalam game.\nData yang diperlukan: Player ID dan server/region jika diminta oleh varian.\nCara pesan: masukkan data akun, pilih nominal Token yang tersedia, periksa kembali, lalu bayar.\nCatatan: produk mengikuti server dan ketentuan SKU aktif.',
+  'Roblox Robux': 'Roblox Robux — mata uang virtual Roblox yang dapat digunakan untuk membeli item avatar, aksesori, dan konten yang mendukung Robux.\nData yang diperlukan: username atau data akun sesuai metode produk yang tampil.\nCara pesan: pilih varian Robux, masukkan data yang diminta, periksa kembali username/akun, lalu bayar.\nCatatan: metode penyaluran dapat berbeda antarvarian; ikuti instruksi pada produk yang dipilih.',
+  'Valorant': 'VALORANT — layanan top up VALORANT Points (VP), mata uang untuk membeli skin senjata, bundle, dan konten kosmetik.\nData yang diperlukan: Riot ID dan tagline atau data akun sesuai petunjuk varian.\nCara pesan: masukkan Riot ID dengan benar, pilih nominal VP yang tersedia, periksa region akun, lalu bayar.\nCatatan: region akun harus sesuai dengan produk yang dipilih.',
+  'League of Legends': 'League of Legends — layanan top up Riot Points (RP) untuk membeli skin, champion, dan konten dalam game.\nData yang diperlukan: Riot ID atau data akun sesuai instruksi SKU.\nCara pesan: masukkan data akun, pilih nominal RP aktif, pastikan region sesuai, lalu selesaikan pembayaran.\nCatatan: pilihan produk mengikuti region dan ketersediaan penyedia.',
+  'Point Blank': 'Point Blank — layanan top up cash/point game untuk membeli item, senjata, dan konten dalam permainan.\nData yang diperlukan: ID akun Point Blank sesuai instruksi produk.\nCara pesan: masukkan ID, pilih nominal yang tersedia, periksa data, lalu bayar.\nCatatan: jenis mata uang dan server mengikuti varian yang ditampilkan.',
+  'Arena Breakout': 'Arena Breakout — layanan top up Bonds atau mata uang game sesuai produk yang tersedia.\nData yang diperlukan: Player ID/UID akun.\nCara pesan: masukkan ID pemain, pilih nominal Bonds atau paket aktif, periksa data, lalu selesaikan pembayaran.\nCatatan: pastikan versi dan region akun sesuai dengan SKU.',
+  'Blood Strike': 'Blood Strike — layanan top up Gold atau paket mata uang dalam game sesuai katalog.\nData yang diperlukan: Player ID/UID.\nCara pesan: masukkan ID pemain, pilih nominal yang tersedia, periksa kembali data, lalu bayar.\nCatatan: bonus dan isi paket mengikuti varian aktif.',
+  'Stumble Guys': 'Stumble Guys — layanan top up Gems, token, atau paket dalam game sesuai varian yang tersedia.\nData yang diperlukan: Player ID atau data akun sesuai petunjuk produk.\nCara pesan: masukkan data yang diminta, pilih paket, periksa kembali, lalu selesaikan pembayaran.\nCatatan: pastikan platform/akun sesuai dengan ketentuan varian.',
+  'Clash of Clans': 'Clash of Clans — layanan top up Gems atau paket resmi dalam game untuk membantu pembelian item dan progres permainan.\nData yang diperlukan: Player Tag atau data akun sesuai instruksi produk.\nCara pesan: masukkan data akun yang diminta, pilih nominal/paket, periksa kembali, lalu bayar.\nCatatan: pastikan akun dan negara/region sesuai ketentuan penyedia.',
+  'Clash Royale': 'Clash Royale — layanan top up Gems atau paket dalam game sesuai katalog yang tersedia.\nData yang diperlukan: Player Tag/ID pemain sesuai instruksi produk.\nCara pesan: masukkan ID pemain, pilih nominal atau paket, periksa kembali, lalu selesaikan pembayaran.\nCatatan: isi paket mengikuti varian aktif.',
+  'Pokémon Unite': 'Pokémon UNITE — layanan top up Aeos Gems atau paket dalam game sesuai produk yang tersedia.\nData yang diperlukan: data akun/Player ID sesuai instruksi varian.\nCara pesan: masukkan data akun, pilih paket, periksa kembali, lalu bayar.\nCatatan: ketersediaan dapat bergantung pada platform dan region.',
+  'Apex Legends': 'Apex Legends — layanan top up Apex Coins atau mata uang digital sesuai varian katalog.\nData yang diperlukan: ID akun/platform sesuai instruksi produk.\nCara pesan: pilih platform yang benar, masukkan data yang diminta, pilih nominal, periksa kembali, lalu bayar.\nCatatan: pastikan produk sesuai platform akun.',
+  'Dota 2': 'Dota 2 — produk digital terkait saldo atau konten Dota 2 sesuai varian yang tersedia pada katalog.\nData yang diperlukan: data akun Steam atau tujuan penyaluran sesuai petunjuk produk.\nCara pesan: pilih varian, ikuti instruksi data tujuan, periksa kembali, lalu selesaikan pembayaran.\nCatatan: jangan menganggap semua varian berupa pengisian saldo; detail mengikuti nama SKU.',
+  'Minecraft': 'Minecraft — produk digital Minecraft atau Minecoins sesuai varian yang benar-benar tersedia pada katalog.\nData yang diperlukan: akun, platform, atau region sesuai instruksi SKU.\nCara pesan: pilih varian, baca ketentuan platform/region, masukkan data yang diminta, lalu bayar.\nCatatan: edisi Java/Bedrock dan wilayah akun dapat memiliki ketentuan berbeda.',
+  'Identity V': 'Identity V — layanan top up Echoes atau paket dalam game sesuai varian yang tersedia.\nData yang diperlukan: Player ID dan server/region bila diminta.\nCara pesan: masukkan data pemain, pilih nominal/paket aktif, periksa kembali, lalu bayar.\nCatatan: pastikan server akun sesuai dengan produk.',
+  'Wuthering Waves': 'Wuthering Waves — layanan top up Lunite atau paket dalam game yang tersedia.\nData yang diperlukan: UID pemain dan server.\nCara pesan: masukkan UID, pilih server dengan benar, pilih nominal/paket, periksa data, lalu bayar.\nCatatan: pengiriman mengikuti server dan SKU yang dipilih.',
+  'Zenless Zone Zero': 'Zenless Zone Zero — layanan top up Monochrome atau paket dalam game sesuai katalog.\nData yang diperlukan: UID pemain dan server/region.\nCara pesan: masukkan UID, pilih server yang sesuai, pilih nominal/paket aktif, periksa kembali, lalu bayar.\nCatatan: pastikan data akun benar sebelum transaksi.',
+  'Ragnarok X': 'Ragnarok X — layanan top up mata uang atau paket digital game sesuai varian yang tersedia.\nData yang diperlukan: ID karakter/akun dan server sesuai instruksi produk.\nCara pesan: masukkan data karakter, pilih server dan nominal yang sesuai, periksa kembali, lalu bayar.\nCatatan: nama mata uang dan isi paket mengikuti SKU aktif.',
+  'Lords Mobile': 'Lords Mobile — layanan top up mata uang atau paket dalam game sesuai produk yang tersedia.\nData yang diperlukan: Player ID/IGG ID sesuai petunjuk varian.\nCara pesan: masukkan ID pemain, pilih paket, periksa kembali, lalu selesaikan pembayaran.\nCatatan: pastikan ID dan server akun benar.',
+  'LifeAfter': 'LifeAfter — layanan top up mata uang atau paket dalam game sesuai varian katalog.\nData yang diperlukan: ID karakter/akun dan server bila diminta.\nCara pesan: masukkan data akun, pilih nominal/paket aktif, periksa kembali, lalu bayar.\nCatatan: platform dan server harus sesuai dengan SKU.',
+  'Super Sus': 'Super Sus — layanan top up Gold atau item/paket digital dalam game sesuai produk yang tersedia.\nData yang diperlukan: Player ID/UID.\nCara pesan: masukkan ID pemain, pilih nominal atau paket, periksa data, lalu selesaikan pembayaran.\nCatatan: isi dan bonus mengikuti varian katalog.',
+  'eFootball': 'eFootball — layanan top up eFootball Coins atau paket dalam game sesuai varian yang tersedia.\nData yang diperlukan: data akun/ID dan platform sesuai instruksi produk.\nCara pesan: pilih platform yang benar, masukkan data yang diminta, pilih nominal, periksa kembali, lalu bayar.\nCatatan: pastikan produk sesuai platform dan region akun.',
+  'FC Mobile': 'EA SPORTS FC Mobile — layanan top up FC Points atau paket dalam game sesuai katalog.\nData yang diperlukan: User ID/UID pemain sesuai petunjuk produk.\nCara pesan: masukkan UID, pilih nominal/paket aktif, periksa kembali data akun, lalu bayar.\nCatatan: bonus dan isi paket mengikuti varian yang tersedia.',
+  'Vidio': 'Vidio — produk akses atau paket berlangganan untuk menikmati tayangan hiburan dan olahraga di layanan Vidio.\nCara pesan: pilih paket/varian yang ditampilkan, masukkan data tujuan jika diminta, lalu selesaikan pembayaran.\nPenyaluran: mengikuti mekanisme produk yang dipilih, misalnya kode atau aktivasi sesuai instruksi SKU.\nCatatan: masa aktif, perangkat, dan cakupan konten mengikuti ketentuan varian.',
+  'Vision+': 'Vision+ — produk akses atau paket berlangganan untuk menikmati konten streaming Vision+.\nCara pesan: pilih paket yang tersedia, masukkan data tujuan bila diminta, lalu selesaikan pembayaran.\nPenyaluran: kode atau aktivasi mengikuti metode varian yang dipilih.\nCatatan: masa aktif dan fitur mengikuti keterangan SKU.',
+  'Viu': 'Viu — produk akses atau paket berlangganan untuk menonton film, serial, dan tayangan di layanan Viu.\nCara pesan: pilih varian yang tersedia, isi data tujuan jika diminta, lalu bayar.\nPenyaluran dan masa aktif mengikuti mekanisme serta ketentuan SKU. Pastikan akun/region sesuai bila dipersyaratkan.',
+  'Netflix': 'Netflix — produk digital terkait akses atau langganan Netflix sesuai varian yang benar-benar tersedia pada katalog.\nCara pesan: baca jenis produk dan ketentuan pada varian, masukkan data yang diminta, lalu selesaikan pembayaran.\nCatatan: jenis akun, metode aktivasi, masa aktif, perangkat, dan region mengikuti detail SKU; TOKOCV2 tidak menjanjikan fitur di luar keterangan produk.',
+  'Spotify': 'Spotify — produk digital terkait akses atau langganan Spotify sesuai varian katalog.\nCara pesan: pilih varian, baca syarat akun/region, masukkan data yang diminta jika ada, lalu bayar.\nCatatan: jenis paket, masa aktif, dan metode aktivasi mengikuti SKU serta ketentuan Spotify.',
+  'Disney+': 'Disney+ — produk akses atau paket berlangganan untuk menikmati konten streaming Disney+ sesuai varian yang tersedia.\nCara pesan: pilih paket, masukkan data tujuan bila diminta, lalu selesaikan pembayaran.\nCatatan: masa aktif, region, perangkat, dan cara aktivasi mengikuti keterangan SKU.',
+  'YouTube Premium': 'YouTube Premium — produk digital untuk akses fitur Premium sesuai varian yang tersedia, seperti pengalaman menonton tanpa iklan dan fitur lain yang berlaku pada paket.\nCara pesan: pilih varian, periksa persyaratan akun dan negara, masukkan data bila diminta, lalu bayar.\nCatatan: metode aktivasi, masa aktif, dan kelayakan akun mengikuti SKU serta ketentuan YouTube.',
+  'WeTV': 'WeTV — produk akses atau paket berlangganan untuk menikmati film dan serial di layanan WeTV.\nCara pesan: pilih paket/varian, masukkan data tujuan bila diminta, lalu selesaikan pembayaran.\nCatatan: masa aktif, akses VIP, dan metode aktivasi mengikuti keterangan SKU.',
+  'iQIYI': 'iQIYI — produk akses atau paket VIP untuk menikmati konten streaming sesuai varian yang tersedia.\nCara pesan: pilih paket, isi data tujuan jika diminta, periksa ketentuan region, lalu bayar.\nCatatan: masa aktif dan metode aktivasi mengikuti SKU.',
+  'Prime Video': 'Prime Video — produk digital terkait akses atau langganan Prime Video sesuai varian yang tersedia.\nCara pesan: pilih varian, baca ketentuan negara/region dan akun, masukkan data bila diminta, lalu bayar.\nCatatan: masa aktif, katalog konten, dan metode aktivasi mengikuti SKU serta ketentuan layanan.',
+  'DramaBox': 'DramaBox — produk akses atau paket untuk menikmati konten drama pendek di layanan DramaBox sesuai varian katalog.\nCara pesan: pilih paket yang tersedia, masukkan data tujuan jika diminta, lalu selesaikan pembayaran.\nCatatan: jumlah kredit, masa aktif, dan cara aktivasi mengikuti SKU.',
+  'FolaPlay': 'FolaPlay — produk akses atau paket hiburan digital sesuai varian yang tersedia pada katalog.\nCara pesan: pilih varian, baca petunjuk aktivasi, masukkan data tujuan bila diminta, lalu bayar.\nCatatan: jenis konten, masa aktif, dan mekanisme akses mengikuti SKU aktif.',
+  'Genflix': 'Genflix — produk akses atau paket streaming untuk menikmati konten hiburan sesuai varian katalog.\nCara pesan: pilih paket, masukkan data tujuan jika diminta, lalu selesaikan pembayaran.\nCatatan: masa aktif, cakupan konten, dan aktivasi mengikuti keterangan SKU.',
+  'Mola': 'Mola — produk akses atau paket streaming hiburan dan olahraga sesuai varian yang tersedia.\nCara pesan: pilih paket, baca ketentuan perangkat/akun, masukkan data jika diminta, lalu bayar.\nCatatan: masa aktif, konten, dan metode aktivasi mengikuti SKU.',
+  'Telkomsel': 'Pulsa Telkomsel — pengisian pulsa reguler ke nomor Telkomsel yang dimasukkan pelanggan.\nCara pesan: masukkan nomor Telkomsel aktif, pilih nominal pulsa yang tampil, pastikan nomor benar, lalu bayar.\nCatatan: nominal, harga, dan status ketersediaan mengikuti katalog aktif; pulsa yang sudah berhasil masuk tidak dapat ditarik kembali.',
+  'Indosat / IM3': 'Pulsa Indosat/IM3 — pengisian pulsa reguler ke nomor Indosat yang dimasukkan pelanggan.\nCara pesan: masukkan nomor Indosat/IM3 aktif, pilih nominal yang tersedia, periksa nomor, lalu bayar.\nCatatan: pilihan nominal mengikuti SKU aktif dan ketentuan operator.',
+  'XL': 'Pulsa XL — pengisian pulsa reguler ke nomor XL yang dimasukkan pelanggan.\nCara pesan: masukkan nomor XL aktif, pilih nominal yang tersedia, periksa kembali nomor, lalu selesaikan pembayaran.\nCatatan: harga dan ketersediaan mengikuti katalog.',
+  'AXIS': 'Pulsa AXIS — pengisian pulsa reguler ke nomor AXIS yang dimasukkan pelanggan.\nCara pesan: masukkan nomor AXIS aktif, pilih nominal, pastikan nomor benar, lalu bayar.\nCatatan: transaksi mengikuti ketentuan operator dan SKU aktif.',
+  'Tri (3)': 'Pulsa Tri (3) — pengisian pulsa reguler ke nomor Tri yang dimasukkan pelanggan.\nCara pesan: masukkan nomor Tri aktif, pilih nominal yang tersedia, periksa kembali nomor, lalu bayar.\nCatatan: nominal dan harga mengikuti katalog aktif.',
+  'Smartfren': 'Pulsa Smartfren — pengisian pulsa reguler ke nomor Smartfren yang dimasukkan pelanggan.\nCara pesan: masukkan nomor Smartfren aktif, pilih nominal yang tersedia, periksa nomor, lalu selesaikan pembayaran.\nCatatan: ketersediaan mengikuti SKU aktif.',
+  'by.U': 'Pulsa by.U — pengisian pulsa ke nomor by.U sesuai nominal yang tersedia pada katalog.\nCara pesan: masukkan nomor by.U aktif, pilih nominal, periksa kembali nomor tujuan, lalu bayar.\nCatatan: produk dan nominal mengikuti ketersediaan penyedia.',
+  'Live.On': 'Pulsa Live.On — pengisian pulsa/produk isi ulang ke nomor Live.On sesuai varian yang tersedia.\nCara pesan: masukkan nomor Live.On, pilih produk yang tampil, periksa kembali data tujuan, lalu bayar.\nCatatan: jenis produk mengikuti nama dan detail SKU aktif.',
+  'DANA': 'DANA — produk pengisian saldo ke akun DANA pelanggan sesuai nominal yang tersedia.\nData yang diperlukan: nomor ponsel yang terdaftar pada akun DANA.\nCara pesan: masukkan nomor DANA, pilih nominal, periksa nomor dengan teliti, lalu bayar.\nCatatan: pastikan nomor terdaftar dan aktif; nominal serta proses mengikuti SKU penyedia.',
+  'OVO': 'OVO — produk pengisian saldo OVO sesuai nominal yang tersedia pada katalog.\nData yang diperlukan: nomor ponsel yang terdaftar pada akun OVO.\nCara pesan: masukkan nomor OVO, pilih nominal, periksa kembali nomor, lalu bayar.\nCatatan: pastikan akun dapat menerima saldo dan ikuti ketentuan produk.',
+  'GoPay': 'GoPay — produk pengisian saldo GoPay sesuai varian dan nominal yang tersedia.\nData yang diperlukan: nomor ponsel akun GoPay atau data tujuan sesuai petunjuk produk.\nCara pesan: masukkan data tujuan, pilih nominal, periksa kembali, lalu selesaikan pembayaran.\nCatatan: ketersediaan dan metode pengiriman mengikuti SKU aktif.',
+  'ShopeePay': 'ShopeePay — produk pengisian saldo ShopeePay sesuai nominal yang ditampilkan.\nData yang diperlukan: nomor ponsel yang terdaftar pada akun ShopeePay.\nCara pesan: masukkan nomor tujuan, pilih nominal, pastikan nomor benar, lalu bayar.\nCatatan: pastikan akun aktif dan dapat menerima pengisian saldo.',
+  'LinkAja': 'LinkAja — produk pengisian saldo akun LinkAja sesuai nominal yang tersedia.\nData yang diperlukan: nomor ponsel akun LinkAja.\nCara pesan: masukkan nomor, pilih nominal, periksa kembali data, lalu selesaikan pembayaran.\nCatatan: nominal dan ketersediaan mengikuti SKU aktif.',
+  'MAXIM': 'MAXIM — produk saldo/isi ulang untuk layanan MAXIM sesuai jenis produk yang tersedia pada katalog.\nData yang diperlukan: nomor atau ID akun sesuai instruksi varian.\nCara pesan: baca nama produk, masukkan data tujuan yang diminta, pilih nominal, periksa kembali, lalu bayar.\nCatatan: pastikan varian sesuai jenis akun/layanan; jangan memasukkan data selain yang diminta.',
+  'iSaku': 'iSaku — produk pengisian saldo uang elektronik iSaku sesuai varian yang tersedia.\nData yang diperlukan: nomor akun/ponsel sesuai petunjuk produk.\nCara pesan: masukkan data tujuan, pilih nominal, periksa kembali, lalu bayar.\nCatatan: nominal dan metode pengisian mengikuti SKU aktif.',
+  'Sakuku': 'Sakuku — produk pengisian saldo uang elektronik Sakuku sesuai produk yang tersedia.\nData yang diperlukan: nomor akun/ponsel sesuai instruksi varian.\nCara pesan: masukkan data tujuan, pilih nominal, pastikan benar, lalu selesaikan pembayaran.\nCatatan: ikuti ketentuan akun dan SKU penyedia.',
+  'AstraPay': 'AstraPay — produk pengisian saldo akun AstraPay sesuai nominal/varian yang tersedia.\nData yang diperlukan: nomor ponsel atau ID akun sesuai petunjuk produk.\nCara pesan: masukkan data tujuan, pilih nominal, periksa kembali, lalu bayar.\nCatatan: produk mengikuti ketersediaan SKU dan ketentuan AstraPay.',
+  'Jenius': 'Jenius — produk digital/isi ulang terkait layanan Jenius sesuai varian yang ditampilkan pada katalog.\nData yang diperlukan: nomor atau identitas tujuan sesuai instruksi SKU.\nCara pesan: periksa detail produk, masukkan data yang diminta, pilih nominal, lalu bayar.\nCatatan: jangan memasukkan PIN, password, OTP, atau data rahasia akun.',
+  'Mandiri e-money': 'Mandiri e-money — produk isi ulang saldo kartu uang elektronik Mandiri sesuai nominal yang tersedia.\nData yang diperlukan: nomor kartu Mandiri e-money.\nCara pesan: masukkan nomor kartu, pilih nominal, periksa nomor, lalu bayar.\nCatatan: pada sebagian kartu/kanal, saldo perlu diperbarui melalui perangkat atau aplikasi yang mendukung update saldo.',
+  'BRIZZI': 'BRIZZI — produk isi ulang saldo kartu BRIZZI sesuai nominal yang tersedia pada katalog.\nData yang diperlukan: nomor kartu BRIZZI.\nCara pesan: masukkan nomor kartu, pilih nominal, periksa kembali, lalu selesaikan pembayaran.\nCatatan: saldo mungkin perlu di-update melalui kanal/perangkat yang mendukung setelah pengisian berhasil.',
+  'BNI TapCash': 'BNI TapCash — produk isi ulang saldo kartu uang elektronik TapCash sesuai nominal yang tersedia.\nData yang diperlukan: nomor kartu TapCash.\nCara pesan: masukkan nomor kartu, pilih nominal, pastikan nomor benar, lalu bayar.\nCatatan: saldo dapat memerlukan proses update balance melalui perangkat/kanal yang mendukung.',
+  'Token Listrik PLN': 'Token Listrik PLN — pembelian kode token listrik prabayar untuk dimasukkan ke meteran pelanggan.\nData yang diperlukan: nomor meter atau ID pelanggan PLN.\nCara pesan: masukkan nomor meter/ID pelanggan, pilih nominal token yang tersedia, periksa nama/tujuan bila ditampilkan, lalu bayar.\nPenyaluran: kode token diberikan secara digital setelah transaksi dinyatakan berhasil.\nCatatan: pastikan nomor pelanggan benar; token yang sudah diterbitkan tidak dapat dibatalkan.'
+};
+
+function buildTOKOCV2ExpandedDescription(category, productName, baseDetail) {
+  const name = productName || 'produk pilihan';
+  const lines = [
+    'INFORMASI PRODUK TOKOCV2',
+    baseDetail || ('Produk ' + name + ' diproses berdasarkan varian aktif yang ditampilkan pada katalog TOKOCV2.'),
+    '',
+    'KEGUNAAN DAN ISI PRODUK',
+    'Produk ini ditujukan untuk kebutuhan digital sesuai nama kategori dan varian yang dipilih pelanggan.',
+    'Isi yang diterima pelanggan mengikuti nama, nominal, keterangan, dan ketentuan SKU yang tampil pada pilihan produk.',
+    'Setiap nominal atau paket dapat memiliki isi, masa berlaku, wilayah penggunaan, dan ketentuan berbeda.',
+    'Karena itu, baca nama varian dan keterangan produk sebelum melanjutkan ke pembayaran.',
+    '',
+    'CARA PEMESANAN',
+    '1. Pilih produk ' + name + ' yang ingin dibeli pada katalog.',
+    '2. Periksa nominal atau paket yang tersedia dan pilih sesuai kebutuhan.',
+    '3. Masukkan nomor tujuan, ID pemain, atau data lain yang diminta pada formulir transaksi.',
+    '4. Periksa kembali setiap karakter pada data tujuan sebelum membuat pesanan.',
+    '5. Tinjau ringkasan produk dan jumlah pembayaran yang ditampilkan.',
+    '6. Selesaikan pembayaran melalui metode yang tersedia pada halaman checkout.',
+    '7. Tunggu verifikasi pembayaran dan pembaruan status pesanan pada halaman transaksi.',
+    '',
+    'DATA TUJUAN DAN KETELITIAN',
+    'Gunakan hanya data tujuan yang diminta oleh formulir untuk varian tersebut.',
+    'Pastikan nomor atau ID milik akun yang benar dan masih dapat menerima produk.',
+    'Jangan mengirimkan kata sandi, PIN, kode OTP, atau informasi rahasia akun kepada siapa pun.',
+    'Jika suatu varian memerlukan server, region, platform, atau jenis akun tertentu, cocokkan dengan akun tujuan sebelum checkout.',
+    '',
+    'HARGA, VARIAN, DAN KETERSEDIAAN',
+    'Harga dan nominal yang berlaku adalah yang terlihat pada pilihan produk saat pelanggan melakukan pemesanan.',
+    'Daftar varian dapat berubah mengikuti ketersediaan produk dari penyedia.',
+    'Nama paket, bonus, kuota, mata uang, masa aktif, serta batas penggunaan mengikuti rincian varian yang dipilih.',
+    'Jangan menyimpulkan isi paket hanya dari nama merek; gunakan keterangan pada SKU yang tampil.',
+    '',
+    'PEMROSESAN PESANAN',
+    'Pesanan diproses setelah pembayaran terverifikasi oleh sistem pembayaran.',
+    'Status menunggu, diproses, berhasil, atau gagal mengikuti pembaruan transaksi dari sistem terkait.',
+    'Jika status masih diproses, periksa kembali status pesanan sebelum membuat pesanan baru untuk tujuan yang sama.',
+    'Hindari melakukan pembayaran berulang untuk pesanan yang statusnya belum jelas.',
+    'Jika terjadi kendala, simpan nomor pesanan dan bukti pembayaran untuk membantu pemeriksaan transaksi.',
+    '',
+    'KETENTUAN PENTING',
+    'Pelanggan bertanggung jawab memastikan produk, nominal, wilayah, dan data tujuan sudah sesuai sebelum membayar.',
+    'Koreksi atau pembatalan dapat terbatas setelah produk digital diteruskan ke penyedia atau berhasil dikirim.',
+    'Apabila transaksi belum berhasil atau status tidak berubah, lakukan pemeriksaan berdasarkan nomor pesanan; jangan menganggap produk telah diterima sebelum statusnya jelas.',
+    'TOKOCV2 menampilkan pilihan produk berdasarkan varian yang tersedia pada katalog; detail akhir tetap mengikuti keterangan SKU yang dipilih.'
+  ];
+
+  if (category === 'Pulsa') {
+    lines.splice(5, 0, 'Pulsa digunakan untuk menambah saldo pulsa pada nomor seluler operator yang sesuai.');
+    lines.splice(6, 0, 'Pastikan nomor tujuan berasal dari operator yang sama dengan produk yang dipilih.');
+  } else if (category === 'Paket Data') {
+    lines.splice(5, 0, 'Paket data digunakan untuk memperoleh kuota internet pada nomor operator yang sesuai.');
+    lines.splice(6, 0, 'Rincian kuota utama, kuota aplikasi/lokal, masa aktif, dan syarat aktivasi harus mengikuti nama serta keterangan paket yang tampil.');
+  } else if (category === 'E-Wallet') {
+    lines.splice(5, 0, 'Produk kategori ini berkaitan dengan saldo atau layanan uang elektronik sesuai varian yang tersedia.');
+    lines.splice(6, 0, 'Periksa apakah formulir meminta nomor ponsel, nomor kartu, atau identitas tujuan lain; jangan menebak format data.');
+  } else if (category === 'Token Listrik') {
+    lines.splice(5, 0, 'Token listrik merupakan kode pembelian listrik prabayar untuk nomor meter atau ID pelanggan yang benar.');
+    lines.splice(6, 0, 'Pastikan nomor meter/ID pelanggan sesuai dengan instalasi listrik yang akan diisi sebelum memilih nominal.');
+  } else if (category === 'Voucher Streaming') {
+    lines.splice(5, 0, 'Produk hiburan digital dapat berupa voucher, paket berlangganan, atau akses sesuai varian yang ditampilkan.');
+    lines.splice(6, 0, 'Periksa jenis paket, durasi, perangkat, wilayah, dan cara aktivasi pada keterangan SKU; setiap varian dapat memiliki ketentuan berbeda.');
+  } else if (category === 'Voucher Game' || category === 'Game') {
+    lines.splice(5, 0, 'Produk game dapat berupa mata uang virtual, kredit, voucher, atau paket dalam game sesuai varian yang tersedia.');
+    lines.splice(6, 0, 'Mata uang dan item yang diterima mengikuti nama produk yang dipilih, bukan otomatis sama untuk semua game.');
+    lines.splice(7, 0, 'Pastikan Player ID, User ID, Zone ID, server, region, dan platform sesuai dengan instruksi produk terkait.');
+  }
+  return lines.join('\n');
+}
+
+function getDigitalLongDescription(category, brand) {
+  const aliases = { 'Roblox':'Roblox Robux', 'Honkai Star Rail':'Honkai: Star Rail', 'Pokemon Unite':'Pokémon Unite', 'PLN':'Token Listrik PLN', 'TapCash':'BNI TapCash', 'Indosat':'Indosat / IM3' };
+  const key = aliases[brand] || brand;
+  let detail = TOKOCV2_DIGITAL_DETAILS[key] || 'Produk digital ' + brand + ' sesuai varian yang tersedia pada katalog TOKOCV2. Pilih produk yang tampil, baca nominal dan keterangan SKU, masukkan data tujuan yang diminta, periksa kembali seluruh data, lalu selesaikan pembayaran. Jenis produk, masa aktif, bonus, dan metode penyaluran mengikuti detail varian aktif dari penyedia.';
+  if (category === 'Paket Data') {
+    detail = 'Paket Data ' + brand + ' — produk kuota internet untuk nomor ' + brand + ' sesuai pilihan paket yang aktif.\nData yang diperlukan: nomor ponsel yang akan menerima paket data.\nCara pesan: masukkan nomor tujuan, pilih paket data yang tampil, baca kuota dan masa aktif pada nama/detail produk, periksa kembali nomor, lalu selesaikan pembayaran.\nCatatan: kuota utama/lokal/aplikasi, masa aktif, zona, dan syarat aktivasi mengikuti varian SKU; pastikan nomor sesuai operator.';
+  }
+  const categoryNote = category === 'Pulsa' ? '\nKategori: Pulsa reguler.' : category === 'Paket Data' ? '\nKategori: Paket data/internet.' : category === 'E-Wallet' ? '\nKategori: Uang elektronik/produk saldo digital.' : category === 'Token Listrik' ? '\nKategori: Produk listrik prabayar.' : category === 'Voucher Game' ? '\nKategori: Voucher dan mata uang digital game.' : category === 'Voucher Streaming' ? '\nKategori: Produk akses dan langganan hiburan digital.' : '';
+  return buildTOKOCV2ExpandedDescription(category, brand, detail + categoryNote + '\nInformasi transaksi: harga dan pilihan nominal ditampilkan pada daftar produk yang aktif. Pesanan diproses setelah pembayaran terverifikasi. Periksa kembali ID/nomor tujuan sebelum konfirmasi.');
+}
+
+function getGameLongDescription(game) {
+  const descriptions = {
+    'Mobile Legends': TOKOCV2_DIGITAL_DETAILS['Mobile Legends'],
+    'Free Fire': TOKOCV2_DIGITAL_DETAILS['Free Fire'],
+    'PUBG Mobile': TOKOCV2_DIGITAL_DETAILS['PUBG Mobile'],
+    'Call of Duty Mobile': TOKOCV2_DIGITAL_DETAILS['Call of Duty Mobile'],
+    'Genshin Impact': TOKOCV2_DIGITAL_DETAILS['Genshin Impact'],
+    'Honkai: Star Rail': TOKOCV2_DIGITAL_DETAILS['Honkai: Star Rail'],
+    'Delta Force': TOKOCV2_DIGITAL_DETAILS['Delta Force'],
+    'Honor of Kings': TOKOCV2_DIGITAL_DETAILS['Honor of Kings'],
+    'Roblox': TOKOCV2_DIGITAL_DETAILS['Roblox Robux'],
+    'Valorant': TOKOCV2_DIGITAL_DETAILS['Valorant'],
+    'League of Legends': TOKOCV2_DIGITAL_DETAILS['League of Legends'],
+    'Point Blank': TOKOCV2_DIGITAL_DETAILS['Point Blank'],
+    'Arena Breakout': TOKOCV2_DIGITAL_DETAILS['Arena Breakout'],
+    'Blood Strike': TOKOCV2_DIGITAL_DETAILS['Blood Strike'],
+    'Stumble Guys': TOKOCV2_DIGITAL_DETAILS['Stumble Guys'],
+    'Clash of Clans': TOKOCV2_DIGITAL_DETAILS['Clash of Clans'],
+    'Clash Royale': TOKOCV2_DIGITAL_DETAILS['Clash Royale'],
+    'Pokémon Unite': TOKOCV2_DIGITAL_DETAILS['Pokémon Unite'],
+    'Apex Legends': TOKOCV2_DIGITAL_DETAILS['Apex Legends'],
+    'Dota 2': TOKOCV2_DIGITAL_DETAILS['Dota 2'],
+    'Minecraft': TOKOCV2_DIGITAL_DETAILS['Minecraft'],
+    'Identity V': TOKOCV2_DIGITAL_DETAILS['Identity V'],
+    'Wuthering Waves': TOKOCV2_DIGITAL_DETAILS['Wuthering Waves'],
+    'Zenless Zone Zero': TOKOCV2_DIGITAL_DETAILS['Zenless Zone Zero'],
+    'Ragnarok X': TOKOCV2_DIGITAL_DETAILS['Ragnarok X'],
+    'Lords Mobile': TOKOCV2_DIGITAL_DETAILS['Lords Mobile'],
+    'LifeAfter': TOKOCV2_DIGITAL_DETAILS['LifeAfter'],
+    'Super Sus': TOKOCV2_DIGITAL_DETAILS['Super Sus'],
+    'eFootball': TOKOCV2_DIGITAL_DETAILS['eFootball'],
+    'FC Mobile': TOKOCV2_DIGITAL_DETAILS['FC Mobile']
+  };
+  return buildTOKOCV2ExpandedDescription('Game', game, descriptions[game] || ('Top up ' + game + ' sesuai pilihan produk yang aktif pada katalog TOKOCV2. Masukkan ID akun dan server/platform sesuai petunjuk pada form, pilih nominal atau paket yang tersedia, periksa kembali data akun, lalu selesaikan pembayaran. Nama mata uang, bonus, dan ketentuan pengiriman mengikuti SKU aktif dari penyedia.'));
+}
+
 function toggleGameDescription() {
   const extra = document.getElementById('gameDescriptionExtra');
-  extra.hidden = !extra.hidden;
+  const button = document.querySelector('.more-description');
+  if (!extra) return;
+  const isOpening = extra.hidden;
+  extra.hidden = !isOpening;
+  if (button) {
+    // Saat deskripsi terbuka, label Telusuri Selengkapnya diganti
+    // menjadi Tutup Detail agar pelanggan dapat menutupnya kembali.
+    button.textContent = isOpening ? 'Tutup Detail' : 'Telusuri Selengkapnya';
+    button.setAttribute('aria-expanded', isOpening ? 'true' : 'false');
+    button.setAttribute('aria-controls', 'gameDescriptionExtra');
+  }
 }
 
 function openModal(title) {
@@ -3890,7 +4095,12 @@ nav a.active,nav a:hover{background:#eaf7ef!important;color:#159b60!important}
 #topupPage .game-info-content h1{font-size:18px!important;font-weight:800!important;color:#242424!important;margin:2px 0 5px!important}
 #topupPage .game-meta{font-size:11px!important;color:#69736c!important;margin:4px 0!important}
 #topupPage .game-description{clear:both!important;padding-top:10px!important;font-size:13px!important;line-height:1.5!important;color:#555!important}
-#topupPage .more-description{color:#159b60!important;font-weight:700!important}
+#topupPage .more-description{color:#16a34a!important;font-weight:800!important;text-decoration:none!important}
+#topupPage .more-description:hover,#topupPage .more-description:focus-visible{color:#15803d!important;text-decoration:underline!important}
+#topupPage #topupDescription,
+#topupPage #gameDescriptionExtra{color:#111111!important;opacity:1!important}
+#topupPage #gameDescriptionExtra{line-height:1.75!important;font-size:13px!important}
+#topupPage #topupDescription{color:#111111!important}
 #topupPage #orderForm{grid-area:form!important;min-width:0!important;display:flex!important;flex-direction:column!important;gap:14px!important}
 #topupPage .topup-section{background:#fff!important;border:0!important;border-radius:4px!important;padding:16px!important;box-shadow:0 1px 4px #00000012!important;margin:0!important}
 #topupPage .topup-section h2{font-family:Arial,Helvetica,sans-serif!important;font-size:16px!important;font-style:italic!important;font-weight:800!important;color:#202020!important;margin:0 0 12px!important}
