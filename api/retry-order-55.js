@@ -7,11 +7,14 @@ const ORDER_ID = "TCV2-64adc709-92ef-44d5-80a6-1edb444e95dd";
 function safeEqual(a, b) {
   const x = Buffer.from(String(a || ""));
   const y = Buffer.from(String(b || ""));
+
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+
     return res.status(405).json({
       success: false,
       message: "Method not allowed"
@@ -20,6 +23,14 @@ module.exports = async (req, res) => {
 
   const secret = process.env.DIGIFLAZZ_RECOVERY_SECRET;
   const supplied = req.headers["x-recovery-secret"];
+
+  // Log pemeriksaan autentikasi tanpa membocorkan isi secret.
+  console.log("ORDER55_AUTH_CHECK", {
+    secretConfigured: Boolean(secret),
+    headerPresent: Boolean(supplied),
+    secretLength: secret ? secret.length : 0,
+    headerLength: supplied ? String(supplied).length : 0
+  });
 
   if (!secret || !safeEqual(supplied, secret)) {
     return res.status(401).json({
@@ -39,6 +50,7 @@ module.exports = async (req, res) => {
   }
 
   const base = supabaseUrl.replace(/\/+$/, "");
+
   const headers = {
     apikey: supabaseKey,
     Authorization: `Bearer ${supabaseKey}`,
@@ -47,7 +59,6 @@ module.exports = async (req, res) => {
   };
 
   try {
-    // Klaim order 55 secara atomik agar tidak diproses dua kali.
     const claimUrl =
       `${base}/rest/v1/orders` +
       `?order_id=eq.${encodeURIComponent(ORDER_ID)}` +
@@ -58,7 +69,9 @@ module.exports = async (req, res) => {
     const claimResponse = await fetch(claimUrl, {
       method: "PATCH",
       headers,
-      body: JSON.stringify({ topup_status: "processing" })
+      body: JSON.stringify({
+        topup_status: "processing"
+      })
     });
 
     const claimText = await claimResponse.text();
@@ -72,7 +85,8 @@ module.exports = async (req, res) => {
     if (rows.length !== 1) {
       return res.status(409).json({
         success: false,
-        message: "Order 55 tidak ditemukan, bukan pending, atau sudah diproses. Tidak ada transaksi dikirim."
+        message:
+          "Order 55 tidak ditemukan, bukan pending, atau sudah diproses. Tidak ada transaksi dikirim."
       });
     }
 
@@ -88,7 +102,6 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Mengirim satu transaksi nyata ke Digiflazz.
     const result = await sendDigiflazz({
       order_id: ORDER_ID,
       sku: order.sku,
@@ -106,10 +119,10 @@ module.exports = async (req, res) => {
     } else if (status === "gagal") {
       topupStatus = "failed";
     } else {
-      // Status belum final. Jangan kirim ulang otomatis.
       return res.status(202).json({
         success: true,
-        message: "Transaksi sudah dikirim, status belum final. Jangan kirim ulang.",
+        message:
+          "Transaksi sudah dikirim, status belum final. Jangan kirim ulang.",
         order_id: ORDER_ID,
         digiflazz_status: status || "unknown",
         topup_status: "processing"
@@ -121,12 +134,16 @@ module.exports = async (req, res) => {
       {
         method: "PATCH",
         headers,
-        body: JSON.stringify({ topup_status: topupStatus })
+        body: JSON.stringify({
+          topup_status: topupStatus
+        })
       }
     );
 
     if (!updateResponse.ok) {
-      throw new Error("Transaksi dijawab Digiflazz, tetapi update status Supabase gagal.");
+      throw new Error(
+        "Transaksi dijawab Digiflazz, tetapi update status Supabase gagal."
+      );
     }
 
     return res.status(200).json({
@@ -139,13 +156,12 @@ module.exports = async (req, res) => {
   } catch (error) {
     console.error("ORDER_55_RECOVERY_ERROR:", error.message);
 
-    // Jangan mengembalikan status ke pending:
-    // hasil panggilan API mungkin sudah diterima Digiflazz.
     return res.status(500).json({
       success: false,
-      message: "Hasil belum dapat dipastikan. Jangan kirim ulang transaksi.",
+      message:
+        "Hasil belum dapat dipastikan. Jangan kirim ulang transaksi.",
       order_id: ORDER_ID
     });
   }
 };
-      
+                                  
