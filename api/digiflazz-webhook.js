@@ -62,7 +62,9 @@ async function readOrder(orderId) {
     limit: "1"
   });
 
-  const response = await supabaseRequest(`orders?${query}`);
+  const response = await supabaseRequest(
+    `orders?${query.toString()}`
+  );
 
   const text = await response.text();
 
@@ -71,6 +73,7 @@ async function readOrder(orderId) {
   }
 
   const rows = text ? JSON.parse(text) : [];
+
   return rows[0] || null;
 }
 
@@ -102,9 +105,11 @@ function createRefundKey(orderId) {
   return `TCV2-REF-${hash}`;
 }
 
-async function requestMidtransRefund(orderId, amount, refundKey) {
+function getMidtransConfig() {
   const serverKey = process.env.MIDTRANS_SERVER_KEY;
-  const mode = String(process.env.MIDTRANS_MODE || "").toLowerCase();
+  const mode = String(
+    process.env.MIDTRANS_MODE || ""
+  ).toLowerCase();
 
   if (!serverKey) {
     throw new Error("MIDTRANS_SERVER_KEY belum tersedia");
@@ -120,16 +125,72 @@ async function requestMidtransRefund(orderId, amount, refundKey) {
     throw new Error("MIDTRANS_MODE tidak valid");
   }
 
-  const authorization =
+  return {
+    serverKey,
+    baseUrl
+  };
+}
+
+function getMidtransAuthorization(serverKey) {
+  return (
     "Basic " +
-    Buffer.from(`${serverKey}:`).toString("base64");
+    Buffer.from(`${serverKey}:`).toString("base64")
+  );
+}
+
+// Memeriksa transaksi langsung ke Midtrans.
+async function getMidtransTransactionStatus(orderId) {
+  const { serverKey, baseUrl } = getMidtransConfig();
+
+  const response = await fetch(
+    `${baseUrl}/v2/${encodeURIComponent(orderId)}/status`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: getMidtransAuthorization(serverKey),
+        Accept: "application/json"
+      },
+      signal: AbortSignal.timeout(15000)
+    }
+  );
+
+  const responseText = await response.text();
+
+  let result;
+
+  try {
+    result = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    throw new Error("Respons status Midtrans tidak valid");
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Gagal memeriksa status Midtrans: ${responseText}`
+    );
+  }
+
+  if (String(result.order_id) !== String(orderId)) {
+    throw new Error("Order ID Midtrans tidak cocok");
+  }
+
+  return result;
+}
+
+// Meminta refund ke Midtrans.
+async function requestMidtransRefund(
+  orderId,
+  amount,
+  refundKey
+) {
+  const { serverKey, baseUrl } = getMidtransConfig();
 
   const response = await fetch(
     `${baseUrl}/v2/${encodeURIComponent(orderId)}/refund`,
     {
       method: "POST",
       headers: {
-        Authorization: authorization,
+        Authorization: getMidtransAuthorization(serverKey),
         "Content-Type": "application/json",
         Accept: "application/json"
       },
@@ -144,7 +205,7 @@ async function requestMidtransRefund(orderId, amount, refundKey) {
 
   const responseText = await response.text();
 
-  let result = {};
+  let result;
 
   try {
     result = responseText ? JSON.parse(responseText) : {};
@@ -160,12 +221,15 @@ async function requestMidtransRefund(orderId, amount, refundKey) {
     );
 
     error.refundRejected = true;
+
     throw error;
   }
 
   return result;
 }
 
+// Memproses refund hanya jika top-up benar-benar gagal
+// dan transaksi pembayaran sudah settlement.
 async function processFailedTopup(orderId) {
   const order = await readOrder(orderId);
 
@@ -203,7 +267,7 @@ async function processFailedTopup(orderId) {
     });
   }
 
-  // Baca ulang untuk memastikan status terbaru.
+  // Baca ulang status terbaru.
   const latestOrder = await readOrder(orderId);
 
   if (!latestOrder || latestOrder.topup_status !== "failed") {
@@ -212,9 +276,15 @@ async function processFailedTopup(orderId) {
     };
   }
 
+  if (latestOrder.payment_status !== "paid") {
+    return {
+      message: "Status pembayaran tidak valid"
+    };
+  }
+
   if (latestOrder.refund_status !== "not_requested") {
     return {
-      message: "Refund sudah diproses atau memerlukan pemeriksaan",
+      message: "Refund sudah diproses atau perlu pemeriksaan",
       refund_status: latestOrder.refund_status
     };
   }
@@ -225,10 +295,46 @@ async function processFailedTopup(orderId) {
     throw new Error("Nominal refund tidak valid");
   }
 
+  // VERIFIKASI PEMBAYARAN LANGSUNG KE MIDTRANS.
+  const midtrans = await getMidtransTransactionStatus(orderId);
+
+  const paidAmount = Number(midtrans.gross_amount);
+
+  // Refund otomatis hanya boleh dilakukan jika:
+  // 1. Status Midtrans settlement.
+  // 2. Nominal pembayaran sama dengan harga pesanan.
+  if (
+    midtrans.transaction_status !== "settlement" ||
+    !Number.isSafeInteger(paidAmount) ||
+    paidAmount !== amount
+  ) {
+    const reviewPath =
+      `orders?order_id=eq.${encodeURIComponent(orderId)}` +
+      "&payment_status=eq.paid" +
+      "&topup_status=eq.failed" +
+      "&refund_status=eq.not_requested";
+
+    await updateOrder(reviewPath, {
+      refund_status: "needs_review"
+    });
+
+    console.error("REFUND_VALIDATION_FAILED:", {
+      orderId,
+      midtrans_status: midtrans.transaction_status,
+      midtrans_amount: midtrans.gross_amount,
+      order_amount: amount
+    });
+
+    return {
+      message: "Pembayaran Midtrans belum memenuhi syarat refund otomatis",
+      refund_status: "needs_review"
+    };
+  }
+
   const refundKey = createRefundKey(orderId);
 
   // Kunci refund secara atomik.
-  // Hanya satu proses yang boleh berhasil mengambil kunci ini.
+  // Hanya satu proses yang dapat mengambil kunci ini.
   const claimPath =
     `orders?order_id=eq.${encodeURIComponent(orderId)}` +
     "&payment_status=eq.paid" +
@@ -255,7 +361,7 @@ async function processFailedTopup(orderId) {
       refundKey
     );
 
-    // "requested" bukan berarti uang sudah diterima pelanggan.
+    // Permintaan diterima bukan berarti uang sudah kembali.
     const requestedPath =
       `orders?order_id=eq.${encodeURIComponent(orderId)}` +
       `&refund_key=eq.${encodeURIComponent(refundKey)}` +
@@ -279,8 +385,7 @@ async function processFailedTopup(orderId) {
     };
 
   } catch (error) {
-    // Jika Midtrans memberikan penolakan yang jelas,
-    // tandai untuk pemeriksaan manual.
+    // Penolakan yang jelas harus diperiksa manual.
     if (error.refundRejected) {
       const reviewPath =
         `orders?order_id=eq.${encodeURIComponent(orderId)}` +
@@ -298,13 +403,13 @@ async function processFailedTopup(orderId) {
       });
 
       return {
-        message: "Permintaan refund ditolak Midtrans dan perlu diperiksa",
+        message: "Refund ditolak Midtrans dan perlu pemeriksaan",
         refund_status: "needs_review"
       };
     }
 
-    // Jika timeout atau hasil tidak pasti, jangan kirim ulang.
-    // Status requesting dipertahankan untuk rekonsiliasi.
+    // Timeout atau hasil tidak pasti:
+    // jangan kirim permintaan refund kedua secara otomatis.
     console.error("MIDTRANS_REFUND_UNCERTAIN:", {
       orderId,
       refundKey,
@@ -324,6 +429,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Batasi ukuran request.
     const contentLength = Number(req.headers["content-length"]);
 
     if (
@@ -366,6 +472,7 @@ export default async function handler(req, res) {
     }
 
     const rawBody = Buffer.concat(chunks, totalSize);
+
     let payload;
 
     try {
@@ -401,7 +508,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Verifikasi signature transaksi.
+    // Verifikasi signature transaksi Digiflazz.
     const signature = req.headers["x-hub-signature"] || "";
 
     const expected =
@@ -422,10 +529,14 @@ export default async function handler(req, res) {
     const orderId = data.ref_id;
     const status = String(data.status || "").toLowerCase();
 
-    if (!orderId) {
+    if (
+      typeof orderId !== "string" ||
+      !orderId.trim() ||
+      orderId.length > 200
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Ref ID tidak ditemukan"
+        message: "Ref ID tidak valid"
       });
     }
 
@@ -436,13 +547,10 @@ export default async function handler(req, res) {
       });
     }
 
-    const { url: supabaseUrl } = getSupabaseConfig();
+    // Pastikan konfigurasi Supabase tersedia.
+    getSupabaseConfig();
 
-    if (!supabaseUrl) {
-      throw new Error("Konfigurasi Supabase tidak valid");
-    }
-
-    // Status sukses: hanya ubah pesanan yang belum final.
+    // Status sukses.
     if (status === "sukses") {
       const successPath =
         `orders?order_id=eq.${encodeURIComponent(orderId)}` +
@@ -469,7 +577,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Status gagal: proses refund otomatis.
+    // Status gagal: jalankan pemeriksaan dan refund.
     const result = await processFailedTopup(orderId);
 
     console.log("DIGIFLAZZ_WEBHOOK_FAILED:", {
@@ -493,4 +601,4 @@ export default async function handler(req, res) {
     });
   }
 }
-        
+      
