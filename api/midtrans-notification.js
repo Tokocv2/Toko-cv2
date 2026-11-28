@@ -398,6 +398,15 @@ async function processRefund(orderId) {
     };
   }
 
+  // PENGAMAN REFUND OTOMATIS
+  // Tidak mengirim refund jika variabel belum disetel persis "true".
+  if (process.env.MIDTRANS_AUTO_REFUND !== "true") {
+    return {
+      refund_status: order.refund_status,
+      message: "Refund otomatis dinonaktifkan; menunggu persetujuan manual"
+    };
+  }
+
   if (order.refund_status === "not_requested") {
     const claimed = await updateOrder(
       `orders?order_id=eq.${encodeURIComponent(orderId)}` +
@@ -856,4 +865,3 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-    
