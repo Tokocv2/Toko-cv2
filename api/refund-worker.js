@@ -5,13 +5,13 @@ const BATCH_SIZE = 20;
 const IN_FLIGHT_GRACE_MS = 2 * 60 * 1000;
 const MAX_REFUND_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-function config() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY;
+function getConfig() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SECRET_KEY;
   const serverKey = process.env.MIDTRANS_SERVER_KEY;
   const mode = String(process.env.MIDTRANS_MODE || "").toLowerCase();
 
-  if (!url || !key || !serverKey) {
+  if (!supabaseUrl || !supabaseKey || !serverKey) {
     throw new Error("Konfigurasi Supabase atau Midtrans belum lengkap");
   }
 
@@ -27,31 +27,32 @@ function config() {
   }
 
   return {
-    supabaseUrl: url.replace(/\/+$/, ""),
-    supabaseKey: key,
+    supabaseUrl: supabaseUrl.replace(/\/+$/, ""),
+    supabaseKey,
     serverKey,
     baseUrl
   };
 }
 
-async function supabase(path, options = {}) {
-  const c = config();
+async function supabaseRequest(path, options = {}) {
+  const config = getConfig();
 
-  return fetch(`${c.supabaseUrl}/rest/v1/${path}`, {
+  return fetch(`${config.supabaseUrl}/rest/v1/${path}`, {
     ...options,
     headers: {
-      apikey: c.supabaseKey,
-      Authorization: `Bearer ${c.supabaseKey}`,
+      apikey: config.supabaseKey,
+      Authorization: `Bearer ${config.supabaseKey}`,
       "Content-Type": "application/json",
       ...options.headers
     },
-    signal: AbortSignal.timeout(15000)
+    signal: options.signal || AbortSignal.timeout(15000)
   });
 }
 
 async function readEligibleOrders() {
   const query = new URLSearchParams({
-    select: "order_id,selling_price,payment_status,topup_status,refund_status,refund_key,refund_amount,refund_requested_at",
+    select:
+      "order_id,selling_price,payment_status,topup_status,refund_status,refund_key,refund_amount,refund_requested_at",
     payment_status: "eq.paid",
     topup_status: "eq.failed",
     refund_status: "in.(not_requested,requesting,requested)",
@@ -59,7 +60,7 @@ async function readEligibleOrders() {
     limit: String(BATCH_SIZE)
   });
 
-  const response = await supabase(`orders?${query}`);
+  const response = await supabaseRequest(`orders?${query}`);
   const raw = await response.text();
 
   if (!response.ok) {
@@ -75,7 +76,7 @@ async function patchOrder(orderId, filters, values) {
     ...filters
   });
 
-  const response = await supabase(`orders?${params}`, {
+  const response = await supabaseRequest(`orders?${params}`, {
     method: "PATCH",
     headers: {
       Prefer: "return=representation"
@@ -100,22 +101,23 @@ function makeRefundKey(orderId) {
     .slice(0, 32)}`;
 }
 
-function headers() {
-  const c = config();
+function midtransHeaders() {
+  const { serverKey } = getConfig();
 
   return {
-    Authorization: `Basic ${Buffer.from(`${c.serverKey}:`).toString("base64")}`,
+    Authorization:
+      `Basic ${Buffer.from(`${serverKey}:`).toString("base64")}`,
     Accept: "application/json"
   };
 }
 
 async function midtransStatus(orderId) {
-  const c = config();
+  const { baseUrl } = getConfig();
 
   const response = await fetch(
-    `${c.baseUrl}/v2/${encodeURIComponent(orderId)}/status`,
+    `${baseUrl}/v2/${encodeURIComponent(orderId)}/status`,
     {
-      headers: headers(),
+      headers: midtransHeaders(),
       signal: AbortSignal.timeout(15000)
     }
   );
@@ -130,27 +132,28 @@ async function midtransStatus(orderId) {
   }
 
   if (!response.ok) {
-    throw new Error(`Midtrans status ${response.status}: ${raw}`);
+    throw new Error(
+      `Midtrans status gagal (${response.status}): ${raw}`
+    );
   }
 
   if (String(data.order_id) !== String(orderId)) {
-    throw new Error("Order ID dari Midtrans tidak cocok");
+    throw new Error("Order ID Midtrans tidak cocok");
   }
 
   return data;
 }
 
 async function sendRefund(orderId, amount, key) {
-  const c = config();
+  const { baseUrl } = getConfig();
 
   const response = await fetch(
-    `${c.baseUrl}/v2/${encodeURIComponent(orderId)}/refund`,
+    `${baseUrl}/v2/${encodeURIComponent(orderId)}/refund`,
     {
       method: "POST",
       headers: {
-        ...headers(),
-        "Content-Type": "application/json",
-        "Idempotency-Key": `refund-${key}`
+        ...midtransHeaders(),
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         refund_key: key,
@@ -167,11 +170,13 @@ async function sendRefund(orderId, amount, key) {
   try {
     data = raw ? JSON.parse(raw) : {};
   } catch {
-    data = {};
+    throw new Error("Respons refund Midtrans bukan JSON valid");
   }
 
   if (!response.ok) {
-    throw new Error(`Midtrans refund ${response.status}: ${raw}`);
+    throw new Error(
+      `Midtrans refund gagal (${response.status}): ${raw}`
+    );
   }
 
   if (
@@ -187,8 +192,12 @@ async function sendRefund(orderId, amount, key) {
 async function markReview(order, message) {
   await patchOrder(
     order.order_id,
-    { refund_status: "neq.confirmed" },
-    { refund_status: "needs_review" }
+    {
+      refund_status: "neq.confirmed"
+    },
+    {
+      refund_status: "needs_review"
+    }
   );
 
   console.error("REFUND_WORKER_NEEDS_REVIEW:", {
@@ -197,7 +206,7 @@ async function markReview(order, message) {
   });
 }
 
-async function reconcile(order, status) {
+async function reconcileRefund(order, status) {
   const key = order.refund_key || makeRefundKey(order.order_id);
   const amount = Number(order.refund_amount || order.selling_price);
 
@@ -210,9 +219,16 @@ async function reconcile(order, status) {
     Number(item.refund_amount) === amount
   );
 
-  if (!found) return false;
+  if (!found) {
+    return false;
+  }
 
-  const confirmed = Boolean(found.bank_confirmed_at);
+  const confirmedAt = found.bank_confirmed_at
+    ? new Date(found.bank_confirmed_at)
+    : null;
+
+  const confirmed =
+    confirmedAt && !Number.isNaN(confirmedAt.getTime());
 
   await patchOrder(
     order.order_id,
@@ -223,9 +239,7 @@ async function reconcile(order, status) {
     confirmed
       ? {
           refund_status: "confirmed",
-          refund_confirmed_at: new Date(
-            found.bank_confirmed_at
-          ).toISOString()
+          refund_confirmed_at: confirmedAt.toISOString()
         }
       : {
           refund_status: "requested"
@@ -236,12 +250,16 @@ async function reconcile(order, status) {
 }
 
 function isTooOld(order) {
-  if (!order.refund_requested_at) return false;
+  if (!order.refund_requested_at) {
+    return false;
+  }
 
-  const time = new Date(order.refund_requested_at).getTime();
+  const timestamp = new Date(
+    order.refund_requested_at
+  ).getTime();
 
-  return Number.isFinite(time) &&
-    Date.now() - time > MAX_REFUND_AGE_MS;
+  return Number.isFinite(timestamp) &&
+    Date.now() - timestamp > MAX_REFUND_AGE_MS;
 }
 
 async function processOrder(order) {
@@ -270,37 +288,44 @@ async function processOrder(order) {
   }
 
   if (isTooOld(order)) {
-    await markReview(order, "Melewati batas percobaan ulang 7 hari");
+    await markReview(order, "Batas percobaan ulang 7 hari telah lewat");
     return "needs_review";
   }
 
-  // Hindari mengganggu proses refund yang baru diklaim endpoint lain.
   if (
     order.refund_status === "requesting" &&
     order.refund_requested_at
   ) {
-    const age = Date.now() -
+    const age =
+      Date.now() -
       new Date(order.refund_requested_at).getTime();
 
-    if (Number.isFinite(age) && age < IN_FLIGHT_GRACE_MS) {
+    if (
+      Number.isFinite(age) &&
+      age >= 0 &&
+      age < IN_FLIGHT_GRACE_MS
+    ) {
       return "in_flight";
     }
   }
 
+  // Periksa status pembayaran dan refund langsung ke Midtrans.
   const status = await midtransStatus(orderId);
 
   if (Number(status.gross_amount) !== amount) {
-    await markReview(order, "Nominal Midtrans tidak cocok");
+    await markReview(order, "Nominal pembayaran Midtrans tidak cocok");
     return "needs_review";
   }
 
-  if (await reconcile(order, status)) {
+  // Jika refund dengan key yang sama sudah ditemukan, rekonsiliasi.
+  if (await reconcileRefund(order, status)) {
     return "reconciled";
   }
 
+  // Refund lain yang tidak cocok dengan key toko harus diperiksa manual.
   if (
     Number(status.refund_amount || 0) > 0 ||
-    String(status.transaction_status).toLowerCase() === "refund"
+    String(status.transaction_status || "").toLowerCase() === "refund"
   ) {
     await markReview(
       order,
@@ -310,21 +335,21 @@ async function processOrder(order) {
     return "needs_review";
   }
 
+  // Refund penuh hanya diproses dari transaksi settlement.
   if (
-    !["settlement", "partial_refund"].includes(
-      String(status.transaction_status || "").toLowerCase()
-    )
+    String(status.transaction_status || "").toLowerCase() !==
+    "settlement"
   ) {
     return "waiting_payment";
   }
 
-  // Pengaman utama: tidak ada refund tanpa pengaktifan eksplisit.
+  // PENGAMAN: refund tidak dikirim jika belum diaktifkan secara eksplisit.
   if (process.env.MIDTRANS_AUTO_REFUND !== "true") {
     return "auto_refund_disabled";
   }
 
   if (order.refund_status === "not_requested") {
-    // Klaim atomik: hanya satu proses yang boleh mengambil pesanan ini.
+    // Klaim atomik menggunakan kondisi refund_status.
     const claimed = await patchOrder(
       orderId,
       {
@@ -349,7 +374,7 @@ async function processOrder(order) {
     return "skipped";
   }
 
-  // Periksa sekali lagi sebelum mengirim refund.
+  // Periksa lagi sebelum mengirim permintaan refund.
   const latestStatus = await midtransStatus(orderId);
 
   if (Number(latestStatus.gross_amount) !== amount) {
@@ -357,15 +382,14 @@ async function processOrder(order) {
     return "needs_review";
   }
 
-  if (await reconcile(order, latestStatus)) {
+  if (await reconcileRefund(order, latestStatus)) {
     return "reconciled";
   }
 
   if (
     Number(latestStatus.refund_amount || 0) > 0 ||
-    !["settlement", "partial_refund"].includes(
-      String(latestStatus.transaction_status || "").toLowerCase()
-    )
+    String(latestStatus.transaction_status || "").toLowerCase() !==
+      "settlement"
   ) {
     await markReview(order, "Status transaksi berubah sebelum refund");
     return "needs_review";
@@ -379,12 +403,11 @@ async function processOrder(order) {
       message: error.message
     });
 
-    // Jangan membuat refund_key baru. Cek dahulu apakah Midtrans
-    // sudah menerima permintaan sebelum percobaan berikutnya.
+    // Jika respons tidak pasti, periksa Midtrans sebelum mencoba ulang.
     try {
       const afterError = await midtransStatus(orderId);
 
-      if (await reconcile(order, afterError)) {
+      if (await reconcileRefund(order, afterError)) {
         return "reconciled_after_error";
       }
     } catch (checkError) {
@@ -399,7 +422,7 @@ async function processOrder(order) {
 
   const after = await midtransStatus(orderId);
 
-  if (await reconcile(order, after)) {
+  if (await reconcileRefund(order, after)) {
     return "refund_submitted";
   }
 
@@ -442,8 +465,10 @@ module.exports = async function handler(req, res) {
       try {
         const result = await processOrder(order);
 
-        if (result === "reconciled" ||
-            result === "reconciled_after_error") {
+        if (
+          result === "reconciled" ||
+          result === "reconciled_after_error"
+        ) {
           summary.reconciled++;
         } else if (result === "refund_submitted") {
           summary.refund_submitted++;
@@ -482,3 +507,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+      
