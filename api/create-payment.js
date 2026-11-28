@@ -1,4 +1,3 @@
-
 import crypto from "node:crypto";
 import https from "node:https";
 
@@ -37,6 +36,8 @@ function validateSnapRedirectUrl(value, mode) {
       parsedUrl.port ||
       parsedUrl.username ||
       parsedUrl.password ||
+      parsedUrl.search ||
+      parsedUrl.hash ||
       !allowedPath.test(parsedUrl.pathname)
     ) {
       return null;
@@ -49,7 +50,7 @@ function validateSnapRedirectUrl(value, mode) {
 }
 
 // CEK SALDO DIGIFLAZZ MELALUI PROXY NODE4
-// Fungsi ini hanya digunakan oleh create-payment.js.
+// Hanya digunakan oleh create-payment.js.
 // Tidak mengubah api/cek-saldo.js atau lib/digiflazz.js.
 async function checkDigiflazzDeposit() {
   const username = process.env.DIGIFLAZZ_USERNAME;
@@ -112,11 +113,9 @@ async function checkDigiflazzDeposit() {
             if (totalBytes > MAX_RESPONSE_SIZE) {
               tooLarge = true;
               chunks.length = 0;
-
               response.destroy(
                 new Error("Respons Digiflazz terlalu besar")
               );
-
               return;
             }
 
@@ -158,23 +157,36 @@ async function checkDigiflazzDeposit() {
     });
 
     if (
+      !Number.isInteger(result.statusCode) ||
       result.statusCode < 200 ||
       result.statusCode >= 300
     ) {
       throw new Error("Permintaan saldo Digiflazz gagal");
     }
 
-    const deposit = Number(result.data?.data?.deposit);
+    // VALIDASI TIPE DATA SALDO ASLI
+    const rawDeposit = result.data?.data?.deposit;
 
-    if (
-      !Number.isSafeInteger(deposit) ||
-      deposit < 0
-    ) {
+    const validNumber =
+      typeof rawDeposit === "number" &&
+      Number.isSafeInteger(rawDeposit);
+
+    const validNumericString =
+      typeof rawDeposit === "string" &&
+      /^\d+$/.test(rawDeposit) &&
+      Number.isSafeInteger(Number(rawDeposit));
+
+    if (!validNumber && !validNumericString) {
+      throw new Error("Nominal saldo Digiflazz tidak valid");
+    }
+
+    const deposit = Number(rawDeposit);
+
+    if (deposit < 0) {
       throw new Error("Nominal saldo Digiflazz tidak valid");
     }
 
     return deposit;
-
   } finally {
     agent.destroy();
   }
@@ -271,7 +283,7 @@ export default async function handler(req, res) {
   };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  const timer = setTimeout(() => controller.abort(), 60000);
 
   let lockClaimed = false;
   let midtransRequestStarted = false;
@@ -383,7 +395,6 @@ export default async function handler(req, res) {
     }
 
     // AMBIL PESANAN MILIK PEMBELI
-    // Field modal ditambahkan untuk pemeriksaan saldo.
     const params = new URLSearchParams({
       select:
         "order_id,user_id,guest_access_token_hash,sku,customer_no,product_name,modal,selling_price,payment_status,payment_creation_status",
@@ -530,7 +541,7 @@ export default async function handler(req, res) {
 
     lockClaimed = true;
 
-    // CEK SALDO DIGIFLAZZ SEBELUM MEMBUAT QRIS
+    // CEK SALDO DIGIFLAZZ SEBELUM MEMBUAT PEMBAYARAN
     let deposit;
 
     try {
@@ -745,7 +756,6 @@ export default async function handler(req, res) {
         payment_url: redirectUrl
       }
     });
-
   } catch (error) {
     console.error("CREATE_PAYMENT_ERROR:", error.message);
 
@@ -771,9 +781,8 @@ export default async function handler(req, res) {
         : "Terjadi kesalahan saat membuat pembayaran",
       order_id: cleanOrderId
     });
-
   } finally {
     clearTimeout(timer);
   }
 }
-    
+
