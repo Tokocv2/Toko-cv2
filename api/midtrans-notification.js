@@ -34,11 +34,30 @@ function parsePayload(req) {
 function getConfig() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SECRET_KEY;
-  const serverKey = process.env.MIDTRANS_SERVER_KEY;
-  const mode = String(process.env.MIDTRANS_MODE || "").trim().toLowerCase();
 
-  if (!url || !key) throw new Error("Konfigurasi Supabase belum lengkap");
-  if (!serverKey) throw new Error("MIDTRANS_SERVER_KEY belum tersedia");
+  const serverKey = String(
+    process.env.MIDTRANS_SERVER_KEY || ""
+  ).trim();
+
+  const signatureKey = String(
+    process.env.MIDTRANS_SIGNATURE_KEY || ""
+  ).trim();
+
+  const mode = String(
+    process.env.MIDTRANS_MODE || ""
+  ).trim().toLowerCase();
+
+  if (!url || !key) {
+    throw new Error("Konfigurasi Supabase belum lengkap");
+  }
+
+  if (!serverKey) {
+    throw new Error("MIDTRANS_SERVER_KEY belum tersedia");
+  }
+
+  if (!signatureKey) {
+    throw new Error("MIDTRANS_SIGNATURE_KEY belum tersedia");
+  }
 
   const baseUrl =
     mode === "production" || mode === "prod"
@@ -55,6 +74,7 @@ function getConfig() {
     url: url.replace(/\/+$/, ""),
     key,
     serverKey,
+    signatureKey,
     baseUrl
   };
 }
@@ -773,7 +793,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const payload = parsePayload(req);
-    const { serverKey } = getConfig();
+    const { signatureKey } = getConfig();
 
     const orderId = String(payload.order_id || "").trim();
     const statusCode = String(payload.status_code || "").trim();
@@ -799,7 +819,7 @@ module.exports = async function handler(req, res) {
     const expectedSignature = crypto
       .createHash("sha512")
       .update(
-        orderId + statusCode + grossAmount + serverKey,
+        orderId + statusCode + grossAmount + signatureKey,
         "utf8"
       )
       .digest("hex");
