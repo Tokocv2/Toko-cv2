@@ -1,4 +1,8 @@
+
 import crypto from "node:crypto";
+import https from "node:https";
+
+const MAX_RESPONSE_SIZE = 1024 * 1024;
 
 function safeEqual(a, b) {
   const first = Buffer.from(String(a));
@@ -41,6 +45,138 @@ function validateSnapRedirectUrl(value, mode) {
     return parsedUrl.toString();
   } catch {
     return null;
+  }
+}
+
+// CEK SALDO DIGIFLAZZ MELALUI PROXY NODE4
+// Fungsi ini hanya digunakan oleh create-payment.js.
+// Tidak mengubah api/cek-saldo.js atau lib/digiflazz.js.
+async function checkDigiflazzDeposit() {
+  const username = process.env.DIGIFLAZZ_USERNAME;
+  const apiKey = process.env.DIGIFLAZZ_PROD_KEY;
+  const proxyUrl = process.env.DIGIFLAZZ_PROXY_URL;
+
+  if (!username || !apiKey || !proxyUrl) {
+    throw new Error("Konfigurasi Digiflazz belum lengkap");
+  }
+
+  const parsedProxy = new URL(proxyUrl);
+
+  if (!["http:", "https:"].includes(parsedProxy.protocol)) {
+    throw new Error("URL proxy Digiflazz tidak valid");
+  }
+
+  const agent = new https.Agent({
+    proxyEnv: {
+      HTTPS_PROXY: proxyUrl
+    }
+  });
+
+  try {
+    const sign = crypto
+      .createHash("md5")
+      .update(username + apiKey + "depo")
+      .digest("hex");
+
+    const body = JSON.stringify({
+      cmd: "deposit",
+      username,
+      sign
+    });
+
+    const result = await new Promise((resolve, reject) => {
+      const request = https.request(
+        "https://api.digiflazz.com/v1/cek-saldo",
+        {
+          method: "POST",
+          agent,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body)
+          }
+        },
+        (response) => {
+          const chunks = [];
+          let totalBytes = 0;
+          let tooLarge = false;
+
+          response.on("data", (chunk) => {
+            if (tooLarge) return;
+
+            const buffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+
+            totalBytes += buffer.byteLength;
+
+            if (totalBytes > MAX_RESPONSE_SIZE) {
+              tooLarge = true;
+              chunks.length = 0;
+
+              response.destroy(
+                new Error("Respons Digiflazz terlalu besar")
+              );
+
+              return;
+            }
+
+            chunks.push(buffer);
+          });
+
+          response.on("end", () => {
+            if (tooLarge) return;
+
+            try {
+              const responseText = Buffer
+                .concat(chunks, totalBytes)
+                .toString("utf8");
+
+              resolve({
+                statusCode: response.statusCode,
+                data: JSON.parse(responseText)
+              });
+            } catch {
+              reject(
+                new Error("Respons saldo Digiflazz bukan JSON valid")
+              );
+            }
+          });
+
+          response.on("error", reject);
+        }
+      );
+
+      request.setTimeout(30000, () => {
+        request.destroy(
+          new Error("Pengecekan saldo Digiflazz timeout")
+        );
+      });
+
+      request.on("error", reject);
+      request.write(body);
+      request.end();
+    });
+
+    if (
+      result.statusCode < 200 ||
+      result.statusCode >= 300
+    ) {
+      throw new Error("Permintaan saldo Digiflazz gagal");
+    }
+
+    const deposit = Number(result.data?.data?.deposit);
+
+    if (
+      !Number.isSafeInteger(deposit) ||
+      deposit < 0
+    ) {
+      throw new Error("Nominal saldo Digiflazz tidak valid");
+    }
+
+    return deposit;
+
+  } finally {
+    agent.destroy();
   }
 }
 
@@ -247,9 +383,10 @@ export default async function handler(req, res) {
     }
 
     // AMBIL PESANAN MILIK PEMBELI
+    // Field modal ditambahkan untuk pemeriksaan saldo.
     const params = new URLSearchParams({
       select:
-        "order_id,user_id,guest_access_token_hash,sku,customer_no,product_name,selling_price,payment_status,payment_creation_status",
+        "order_id,user_id,guest_access_token_hash,sku,customer_no,product_name,modal,selling_price,payment_status,payment_creation_status",
       order_id: `eq.${cleanOrderId}`,
       limit: "1"
     });
@@ -342,11 +479,19 @@ export default async function handler(req, res) {
     }
 
     const amount = Number(order.selling_price);
+    const modal = Number(order.modal);
 
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Nominal pembayaran tidak valid"
+      });
+    }
+
+    if (!Number.isSafeInteger(modal) || modal <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Modal pesanan tidak valid"
       });
     }
 
@@ -384,6 +529,39 @@ export default async function handler(req, res) {
     }
 
     lockClaimed = true;
+
+    // CEK SALDO DIGIFLAZZ SEBELUM MEMBUAT QRIS
+    let deposit;
+
+    try {
+      deposit = await checkDigiflazzDeposit();
+    } catch (balanceError) {
+      console.error(
+        "DIGIFLAZZ_BALANCE_CHECK_ERROR:",
+        balanceError.message
+      );
+
+      await releaseLock();
+
+      return res.status(503).json({
+        success: false,
+        message:
+          "Saldo Digiflazz gagal diperiksa. Pembayaran belum dibuat. Silakan coba kembali.",
+        order_id: cleanOrderId
+      });
+    }
+
+    // SALDO HARUS MENCUKUPI MODAL PESANAN
+    if (deposit < modal) {
+      await releaseLock();
+
+      return res.status(409).json({
+        success: false,
+        message:
+          "Saldo Digiflazz tidak mencukupi untuk memproses pesanan ini. Silakan coba kembali nanti.",
+        order_id: cleanOrderId
+      });
+    }
 
     // MIDTRANS SNAP
     const snapUrl =
@@ -598,4 +776,4 @@ export default async function handler(req, res) {
     clearTimeout(timer);
   }
 }
-          
+    
