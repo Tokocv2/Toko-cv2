@@ -22,10 +22,7 @@ function getSupabaseConfig() {
     throw new Error("Konfigurasi Supabase belum lengkap");
   }
 
-  return {
-    url: url.replace(/\/+$/, ""),
-    key
-  };
+  return { url: url.replace(/\/+$/, ""), key };
 }
 
 async function supabaseRequest(path, options = {}) {
@@ -98,10 +95,7 @@ function midtransConfig() {
     throw new Error("MIDTRANS_MODE harus sandbox atau production");
   }
 
-  return {
-    serverKey,
-    baseUrl
-  };
+  return { serverKey, baseUrl };
 }
 
 function refundKey(orderId) {
@@ -112,10 +106,12 @@ function refundKey(orderId) {
     .slice(0, 32)}`;
 }
 
+// Header JSON lengkap sesuai dokumentasi Midtrans.
 function midtransHeaders(serverKey) {
   return {
     Authorization: `Basic ${Buffer.from(`${serverKey}:`).toString("base64")}`,
-    Accept: "application/json"
+    Accept: "application/json",
+    "Content-Type": "application/json"
   };
 }
 
@@ -125,6 +121,7 @@ async function midtransStatus(orderId) {
   const response = await fetch(
     `${baseUrl}/v2/${encodeURIComponent(orderId)}/status`,
     {
+      method: "GET",
       headers: midtransHeaders(serverKey),
       signal: AbortSignal.timeout(15000)
     }
@@ -157,10 +154,7 @@ async function postRefund(orderId, amount, key) {
     `${baseUrl}/v2/${encodeURIComponent(orderId)}/refund`,
     {
       method: "POST",
-      headers: {
-        ...midtransHeaders(serverKey),
-        "Content-Type": "application/json"
-      },
+      headers: midtransHeaders(serverKey),
       body: JSON.stringify({
         refund_key: key,
         amount,
@@ -176,9 +170,7 @@ async function postRefund(orderId, amount, key) {
   try {
     data = raw ? JSON.parse(raw) : {};
   } catch {
-    data = {
-      raw_response: raw
-    };
+    data = { raw_response: raw };
   }
 
   if (
@@ -377,6 +369,16 @@ async function processFailedTopup(orderId) {
     };
   }
 
+  // PENGAMAN:
+  // Refund otomatis dinonaktifkan secara default.
+  // Tidak ada permintaan refund yang dikirim tanpa pengaktifan eksplisit.
+  if (process.env.MIDTRANS_AUTO_REFUND !== "true") {
+    return {
+      message: "Refund otomatis dinonaktifkan; menunggu persetujuan manual",
+      refund_status: order.refund_status
+    };
+  }
+
   if (order.refund_status === "not_requested") {
     const claimed = await updateOrder(
       `orders?order_id=eq.${encodeURIComponent(orderId)}&payment_status=eq.paid&topup_status=eq.failed&refund_status=eq.not_requested`,
@@ -415,7 +417,7 @@ async function processFailedTopup(orderId) {
   ) {
     return {
       message: "Status refund tidak dikenal; perlu pemeriksaan",
-      refund_status: order.refund_status
+      refund_status: "needs_review"
     };
   }
 
